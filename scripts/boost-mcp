@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Run the Laravel Boost MCP server of this checkout inside its dev container.
+#
+# The host has no PHP: this project runs PHP only in Docker (docker/development/Dockerfile),
+# so `php artisan boost:mcp` must run in the same container as the app. `docker exec -i`
+# keeps stdin/stdout attached, which is what the MCP stdio transport needs.
+#
+# Used by the MCP configs: opencode.json, .mcp.json, .cursor/mcp.json.
+#
+# The container name follows the branch (see scripts/dev), so every agent and
+# worktree talks to its own instance.
+set -euo pipefail
+
+repo="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
+container="$("$repo/scripts/dev" container)"
+
+if [[ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" != "true" ]]; then
+  echo "laravel-boost: container '$container' is not running. Start it with ./scripts/dev start" >&2
+  exit 1
+fi
+
+exec docker exec -i "$container" php artisan boost:mcp

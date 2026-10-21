@@ -128,6 +128,17 @@ it('starts the branch instance of the main checkout on the default ports', funct
         ->not->toContain('dev:qemu');
 });
 
+it('starts the instance when the checkout has no .env file', function () {
+    unlink($this->devRoot.'/main/.env');
+
+    $process = runDevScript('main', ['start']);
+
+    expect($process->isSuccessful())->toBeTrue($process->getErrorOutput())
+        ->and(devInstanceEnv('main'))->toContain('COMPOSE_PROJECT_NAME=coolify-dev-main')
+        ->and(devScriptLog())->toContain('docker compose -p coolify-dev-main -f docker-compose.dev-multi.yml --env-file')
+        ->and(devScriptLog())->not->toContain('--env-file .env');
+});
+
 it('gives a worktree branch its own port block, tailscale ports, and stable data', function () {
     runDevScript('main', ['start']);
     file_put_contents($this->devLog, '');

@@ -71,7 +71,8 @@ RUN apk add --no-cache \
     jq \
     lsof \
     procps \
-    vim
+    vim \
+    bash
 
 # Install PHP extensions
 # uv: Reverb uses an ext-uv event loop instead of stream_select(), which fails at 1024 open files (FD_SETSIZE)
