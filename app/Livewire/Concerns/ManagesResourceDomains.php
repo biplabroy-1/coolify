@@ -1,0 +1,1528 @@
+<?php
+
+namespace App\Livewire\Concerns;
+
+use App\Actions\Shared\CheckDomainDns;
+use App\Jobs\CheckDomainDnsJob;
+use App\Livewire\Project\Shared\ConfigurationChecker;
+use App\Models\Application;
+use App\Models\Server;
+use App\Support\DomainPortOverrides;
+use App\Support\DomainUrlParts;
+use App\Support\ValidationPatterns;
+use App\Traits\AuditsApplicationSettings;
+use App\Traits\ListensToTeamChannel;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Locked;
+
+/**
+ * The domain management that an application and a database share: the list of domains, adding,
+ * removing and editing them, the check of their DNS records and the DNS provider handling.
+ *
+ * The component that uses the trait has to provide the resource whose domains are managed, either
+ * through the $application or the $database property.
+ */
+trait ManagesResourceDomains
+{
+    public bool $isCompose = false;
+
+    /** @var array<int, string> */
+    public array $composeServices = [];
+
+    /**
+     * Per compose-service www/non-www redirect direction.
+     * Keys are wire-safe (dots encoded) — use serviceRedirectWireKey().
+     *
+     * @var array<string, string>
+     */
+    public array $serviceRedirects = [];
+
+    public bool $labelsAreWritable = false;
+
+    public bool $isForceHttpsEnabled = true;
+
+    public bool $isPermanentRedirectEnabled = false;
+
+    public string $redirect = 'both';
+
+    /** Compose service name when a pending domain conflict belongs to setServiceRedirect. */
+    public ?string $pendingRedirectService = null;
+
+    public bool $showPortWarningModal = false;
+
+    public bool $forceUseUnknownPort = false;
+
+    public ?int $unrecognizedPort = null;
+
+    public ?string $pendingPortAction = null;
+
+    public ?string $newDomainService = null;
+
+    public ?string $editingService = null;
+
+    public ?int $forceAddSuggestedIndex = null;
+
+    protected bool $notifyRedirectUpdate = true;
+
+
+    protected function rules(): array
+    {
+        return [
+            'newDomain' => ValidationPatterns::applicationDomainRules(),
+            'editingDomain' => ValidationPatterns::applicationDomainRules(),
+            'editingIndexing' => 'string|required|in:index,noindex',
+            'editingRedirect' => 'string|required|in:both,www,non-www',
+            'redirect' => 'string|required|in:both,www,non-www',
+            'isForceHttpsEnabled' => 'boolean',
+            'isPermanentRedirectEnabled' => 'boolean',
+            'serviceRedirects' => 'array',
+            'serviceRedirects.*' => 'string|in:both,www,non-www',
+        ];
+    }
+
+
+    protected function messages(): array
+    {
+        return array_merge(
+            ValidationPatterns::combinedMessages(),
+            [
+                'redirect.required' => 'The Redirect setting is required.',
+                'redirect.string' => 'The Redirect setting must be a string.',
+                'redirect.in' => 'The Redirect setting must be both, www, or non-www.',
+                'serviceRedirects.*.in' => 'The Redirect setting must be both, www, or non-www.',
+            ]
+        );
+    }
+
+
+    /**
+     * @return array{internal_port: ?int, has_port_override: bool}
+     */
+    protected function effectiveDomainInternalPort(string $url, ?string $service = null): array
+    {
+        $canonical = DomainPortOverrides::withoutPort($url);
+        $overrides = $this->application->domain_port_overrides ?? [];
+        $legacyPortPart = DomainUrlParts::split($url)['port'] ?? '';
+        $legacyPort = $legacyPortPart !== '' ? (int) $legacyPortPart : null;
+        $hasMapEntry = array_key_exists($canonical, $overrides);
+
+        if ($hasMapEntry) {
+            return [
+                'internal_port' => (int) $overrides[$canonical],
+                'has_port_override' => true,
+            ];
+        }
+
+        if ($legacyPort !== null) {
+            return [
+                'internal_port' => $legacyPort,
+                'has_port_override' => true,
+            ];
+        }
+
+        $composePort = dockerComposeServicePort($this->application->docker_compose_raw, $service);
+        if ($composePort !== null) {
+            return [
+                'internal_port' => $composePort,
+                'has_port_override' => false,
+            ];
+        }
+
+        if ($this->isCompose && $service !== null) {
+            return [
+                'internal_port' => null,
+                'has_port_override' => false,
+            ];
+        }
+
+        if ($this->application->settings?->is_static) {
+            return [
+                'internal_port' => 80,
+                'has_port_override' => false,
+            ];
+        }
+
+        $exposed = $this->application->ports_exposes_array;
+        $defaultPort = isset($exposed[0]) && is_numeric($exposed[0]) && (int) $exposed[0] > 0
+            ? (int) $exposed[0]
+            : null;
+
+        return [
+            'internal_port' => $defaultPort,
+            'has_port_override' => false,
+        ];
+    }
+
+
+    /**
+     * The resource whose domains this component manages: an application or a database.
+     */
+    public function resource(): Model
+    {
+        return $this->application ?? $this->database;
+    }
+
+    /**
+     * Whether the resource is an application. The parts of the domains page that only an
+     * application has (compose services, redirects, www counterparts, noindex) are skipped for a
+     * database.
+     */
+    public function isApplication(): bool
+    {
+        return $this->resource() instanceof Application;
+    }
+
+    /**
+     * The domains of the resource as a list of URLs. An application keeps them in its fqdn, a
+     * database in its domain column.
+     */
+    protected function resourceFqdn(): ?string
+    {
+        $resource = $this->resource();
+
+        if ($resource instanceof Application) {
+            return $resource->fqdn;
+        }
+
+        $domains = method_exists($resource, 'proxyDomains') ? $resource->proxyDomains() : [];
+
+        return $domains === []
+            ? null
+            : collect($domains)->map(fn (string $domain): string => 'https://'.$domain)->implode(',');
+    }
+
+    /**
+     * Store the domains of the resource.
+     */
+    protected function setResourceFqdn(?string $value): void
+    {
+        $resource = $this->resource();
+
+        if ($resource instanceof Application) {
+            $resource->fqdn = $value;
+
+            return;
+        }
+
+        $domains = collect(explode(',', (string) $value))
+            ->map(fn (string $url): string => trim((string) parse_url(trim($url), PHP_URL_HOST)))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $resource->domain = $domains === [] ? null : $domains->implode(',');
+    }
+
+    /**
+     * Whether the resource has more than one server. Only an application can have that.
+     */
+    public function hasAdditionalServers(): bool
+    {
+        return $this->isApplication() && $this->resource()->additional_servers->count() > 0;
+    }
+
+
+    public string $newDomain = '';
+
+    public array $newDomainParts = ['scheme' => 'https', 'host' => '', 'port' => '', 'path' => ''];
+
+    public bool $newDomainPartsChanged = false;
+
+    public ?int $editingIndex = null;
+
+    public string $editingDomain = '';
+
+    public array $editingDomainParts = ['scheme' => 'https', 'host' => '', 'port' => '', 'path' => ''];
+
+    public bool $editingDomainPartsChanged = false;
+
+    public string $editingIndexing = 'index';
+
+    public string $editingRedirect = 'both';
+
+    public string $editingOriginalRedirect = 'both';
+
+    public bool $editingDomainWasRegenerated = false;
+
+    public ?string $editingGeneratedHost = null;
+
+    /** @var array<int, array{url: string, service: ?string, dns_status: string, dns_message: string, expected_ip: ?string, checked_at?: ?string, is_suggested?: bool, suggested_for?: ?string, suggestion_label?: ?string, needs_force_add?: bool, internal_port?: ?int, has_port_override?: bool}> */
+    #[Locked]
+    public array $domainRows = [];
+
+    public array $domainConflicts = [];
+
+    public bool $showDomainConflictModal = false;
+
+    public bool $forceSaveDomains = false;
+
+    public bool $forceSaveDns = false;
+
+    public bool $addDomainDnsFailed = false;
+
+    public string $addDomainDnsMessage = '';
+
+    public bool $showEditDomainModal = false;
+
+    public bool $forceSaveEditDns = false;
+
+    public bool $editDomainDnsFailed = false;
+
+    public string $editDomainDnsMessage = '';
+
+    /** Pending save path after conflict confirmation: add | update | suggested | redirect */
+    public ?string $pendingAction = null;
+
+    public bool $isCheckingDns = false;
+
+    #[Locked]
+    public bool $dnsValidationEnabled = true;
+
+    /** Resolved or literal IP users should point DNS at. */
+    #[Locked]
+    public ?string $serverIp = null;
+
+    /** Raw server IP/hostname as configured (may be a hostname). */
+    #[Locked]
+    public ?string $serverIpConfigured = null;
+
+
+    public function getListeners(): array
+    {
+        return array_merge(
+            ['configurationChanged' => 'refreshDomains', 'confirmDomainUsage'],
+            $this->teamChannelListeners(['DnsRecordConfigurationFinished' => 'dnsRecordConfigurationFinished']),
+        );
+    }
+
+    public function mount(): void
+    {
+        $this->authorize('view', $this->resource());
+        $this->loadDomainState();
+    }
+
+    public function refreshDomains(bool $parseCompose = true): void
+    {
+        $editingRow = $this->editingIndex !== null ? ($this->domainRows[$this->editingIndex] ?? null) : null;
+
+        $this->loadDomainState($parseCompose);
+
+        if ($editingRow !== null) {
+            $index = collect($this->domainRows)->search(fn (array $row): bool => $row['url'] === $editingRow['url']
+                && ($row['service'] ?? null) === ($editingRow['service'] ?? null));
+            $this->editingIndex = $index === false ? null : (int) $index;
+        }
+    }
+
+    public function pollDnsChecks(): void
+    {
+        $this->authorize('view', $this->resource());
+
+        $checkingRows = collect($this->domainRows)
+            ->where('dns_status', 'checking')
+            ->values();
+
+        // The poll only refreshes DNS results. Parsing the compose file here would
+        // queue file sync jobs on every tick and starve the DNS check jobs.
+        $this->refreshDomains(parseCompose: false);
+
+        foreach ($checkingRows as $checkingRow) {
+            $row = collect($this->domainRows)->first(fn (array $row): bool => $row['url'] === $checkingRow['url']
+                && ($row['service'] ?? null) === ($checkingRow['service'] ?? null));
+
+            if (! is_array($row) || $row['dns_status'] === 'checking') {
+                continue;
+            }
+
+            $this->dispatchDnsCheckNotification($row['url'], $row['dns_status']);
+        }
+    }
+
+    protected function dispatchDnsCheckNotification(string $url, string $status): void
+    {
+        $host = parse_url($url, PHP_URL_HOST) ?: $url;
+
+        match ($status) {
+            'ok' => $this->dispatch('success', "DNS is configured correctly for {$host}."),
+            'failed' => $this->dispatch('error', "DNS is not configured for {$host}. Review the required DNS record. If you changed it recently, DNS propagation can take some time, so please try again later."),
+            default => $this->dispatch('info', "DNS check skipped for {$host}."),
+        };
+    }
+
+    public function loadDomainState(bool $parseCompose = true): void
+    {
+        $this->resource()->refresh();
+        $this->resource()->loadMissing(['destination.server']);
+        if ($this->isApplication()) {
+            $this->resource()->loadMissing(['settings', 'additional_servers']);
+        }
+
+        $this->isCompose = $this->isApplication() && data_get($this->resource(), 'build_pack') === 'dockercompose';
+        $this->labelsAreWritable = $this->isApplication()
+            ? data_get($this->resource(), 'settings.is_container_label_readonly_enabled', false) === false
+            : false;
+        if ($this->isApplication()) {
+            if ($this->pendingAction !== 'redirect' || $this->isCompose) {
+                $this->redirect = $this->resource()->redirect ?? 'both';
+            }
+            $this->isForceHttpsEnabled = $this->resource()->isForceHttpsEnabled();
+            $this->isPermanentRedirectEnabled = $this->resource()->isPermanentRedirectEnabled();
+        }
+
+        $settings = instanceSettings();
+        $this->dnsValidationEnabled = (bool) data_get($settings, 'is_dns_validation_enabled', true);
+
+        $server = $this->isApplication()
+            ? $this->resource()->destination?->server
+            : (method_exists($this->resource(), 'proxyServer') ? $this->resource()->proxyServer() : null);
+        if ($server) {
+            if ($server->id === 0) {
+                $configured = data_get($settings, 'public_ipv4')
+                    ?: data_get($settings, 'public_ipv6')
+                    ?: $server->ip;
+            } else {
+                $configured = $server->ip;
+            }
+
+            $resolved = resolveServerIpAddress(is_string($configured) ? $configured : null);
+            $this->serverIpConfigured = $resolved['configured'];
+            // Prefer real IP so users know what DNS record to set even when the
+            // server address is stored as a hostname (e.g. coolify-testing-host).
+            $this->serverIp = $resolved['ip'] ?? $resolved['configured'];
+        } else {
+            $this->serverIp = null;
+            $this->serverIpConfigured = null;
+        }
+
+        $pendingRedirect = $this->isApplication() && $this->pendingRedirectService !== null
+            ? ($this->serviceRedirects[$this->serviceRedirectWireKey($this->pendingRedirectService)] ?? null)
+            : null;
+        if ($this->isApplication()) {
+            $this->serviceRedirects = [];
+        }
+        if (! $this->isApplication()) {
+            $this->composeServices = [];
+        } elseif (! $this->isCompose) {
+            $this->composeServices = [];
+        } elseif ($parseCompose) {
+            try {
+                $parsed = $this->resource()->parse() ?? [];
+            } catch (\Throwable) {
+                $parsed = [];
+            }
+            $this->composeServices = [];
+            $services = data_get($parsed, 'services', []);
+            foreach ($services as $serviceName => $service) {
+                if (! isDatabaseImage(data_get($service, 'image'))) {
+                    $this->composeServices[] = $serviceName;
+                }
+            }
+        }
+        if ($this->isCompose) {
+            if ($this->newDomainService === null && count($this->composeServices) > 0) {
+                $this->newDomainService = $this->composeServices[0];
+            }
+
+            $domains = $this->resource()->docker_compose_domains
+                ? json_decode($this->resource()->docker_compose_domains, true)
+                : [];
+            if (! is_array($domains)) {
+                $domains = [];
+            }
+
+            $serviceNames = $this->composeServices;
+            foreach (array_keys($domains) as $serviceName) {
+                if (! in_array($serviceName, $serviceNames, true)) {
+                    $serviceNames[] = $serviceName;
+                }
+            }
+
+            foreach ($serviceNames as $serviceName) {
+                // data_get treats dots as path separators; read the service entry by array key.
+                $serviceEntry = $domains[$serviceName] ?? null;
+                $storedRedirect = is_array($serviceEntry) ? ($serviceEntry['redirect'] ?? null) : null;
+                $this->serviceRedirects[$this->serviceRedirectWireKey($serviceName)] = $this->normalizeRedirect(
+                    $this->pendingAction === 'redirect' && $serviceName === $this->pendingRedirectService
+                        ? $pendingRedirect
+                        : (is_string($storedRedirect) ? $storedRedirect : null)
+                );
+            }
+        }
+
+        // Do not auto-promote www/non-www pairs here: load/refresh also runs after
+        // removeDomain, and re-adding counterparts would undo intentional deletes.
+        // Pairs are still ensured on setRedirect, addDomain, and generateDomain.
+
+        $this->domainRows = $this->buildDomainRows();
+    }
+
+    /**
+     * @return array<int, array{url: string, service: ?string, dns_status: string, dns_message: string, expected_ip: ?string, checked_at: ?string, is_suggested: bool, suggested_for: ?string, suggestion_label: ?string, needs_force_add: bool}>
+     */
+    protected function buildDomainRows(): array
+    {
+        $rows = [];
+        $stored = $this->storedDomainDnsStatuses();
+
+        if ($this->isCompose) {
+            $domains = $this->resource()->docker_compose_domains
+                ? json_decode($this->resource()->docker_compose_domains, true)
+                : [];
+
+            if (! is_array($domains)) {
+                $domains = [];
+            }
+
+            $serviceNames = $this->composeServices;
+            foreach (array_keys($domains) as $serviceName) {
+                if (! in_array($serviceName, $serviceNames, true)) {
+                    $serviceNames[] = $serviceName;
+                }
+            }
+
+            foreach ($serviceNames as $serviceName) {
+                $configured = [];
+                // Array key access: data_get() would treat dots in service names as path separators.
+                $domainString = is_array($domains[$serviceName] ?? null)
+                    ? ($domains[$serviceName]['domain'] ?? null)
+                    : null;
+                foreach ($this->splitDomains(is_string($domainString) ? $domainString : null) as $url) {
+                    $row = $this->domainRowFromStored($url, $serviceName, $stored);
+                    $rows[] = $row;
+                    $configured[] = $row;
+                }
+
+            }
+
+            return $this->sortDomainRowsByDnsStatus($rows);
+        }
+
+        foreach ($this->splitDomains($this->resourceFqdn()) as $url) {
+            $rows[] = $this->domainRowFromStored($url, null, $stored);
+        }
+
+        return $this->sortDomainRowsByDnsStatus($rows);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    protected function sortDomainRowsByDnsStatus(array $rows): array
+    {
+        return collect($rows)
+            ->sortBy(fn (array $row): int => ($row['dns_status'] ?? null) === 'failed' ? 0 : 1)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, array{status?: string, message?: string, expected_ip?: ?string, checked_at?: ?string}>  $stored
+     * @return array{url: string, service: ?string, dns_status: string, dns_message: string, expected_ip: ?string, checked_at: ?string, is_suggested: bool, suggested_for: ?string, suggestion_label: ?string, needs_force_add: bool, internal_port: ?int, has_port_override: bool}
+     */
+    protected function domainRowFromStored(string $url, ?string $service, array $stored): array
+    {
+        $key = $this->domainDnsStatusKey($url, $service);
+        $entry = $stored[$key] ?? null;
+        $port = $this->effectiveDomainInternalPort($url, $service);
+
+        $row = [
+            'url' => $url,
+            'service' => $service,
+            'internal_port' => $port['internal_port'],
+            'has_port_override' => $port['has_port_override'],
+            'dns_status' => 'pending',
+            'dns_message' => 'Not checked yet.',
+            'expected_ip' => $this->serverIp,
+            'checked_at' => null,
+            'check_id' => null,
+            'is_suggested' => false,
+            'suggested_for' => null,
+            'suggestion_label' => null,
+            'needs_force_add' => false,
+        ];
+
+        if (is_array($entry) && filled(data_get($entry, 'status'))) {
+            $row['dns_status'] = (string) data_get($entry, 'status', 'pending');
+            $row['dns_message'] = (string) data_get($entry, 'message', 'Not checked yet.');
+            $row['expected_ip'] = data_get($entry, 'expected_ip') ?: $this->serverIp;
+            $row['checked_at'] = data_get($entry, 'checked_at');
+            $row['check_id'] = data_get($entry, 'check_id');
+        }
+
+        return $row;
+    }
+
+    /**
+     * @return array<string, array{status: string, message: string, expected_ip: ?string, checked_at: ?string}>
+     */
+    protected function storedDomainDnsStatuses(): array
+    {
+        $stored = array_key_exists('domain_dns_statuses', $this->resource()->getAttributes())
+            ? $this->resource()->domain_dns_statuses
+            : [];
+
+        return is_array($stored) ? $stored : [];
+    }
+
+    protected function domainDnsStatusKey(string $url, ?string $service = null): string
+    {
+        return $service ? "{$service}|{$url}" : $url;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function splitDomains(?string $value): array
+    {
+        if (blank($value)) {
+            return [];
+        }
+
+        return collect(explode(',', $value))
+            ->map(fn ($domain) => trim((string) $domain))
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    public function checkAllDns(): void
+    {
+        $this->authorize('update', $this->resource());
+
+        foreach ($this->domainRows as $row) {
+            $this->queueUrlsDns([$row['url']], $row['service'] ?? null);
+        }
+    }
+
+    public function checkDomainDns(int $index): void
+    {
+        $this->authorize('update', $this->resource());
+
+        if (! isset($this->domainRows[$index])) {
+            return;
+        }
+
+        $row = $this->domainRows[$index];
+        $this->queueUrlsDns([$row['url']], $row['service'] ?? null);
+    }
+
+    protected function applyDnsStatus(int $index, Server $server): void
+    {
+        $this->applyDnsStatuses([$index], $server);
+    }
+
+    /**
+     * @param  array<int, int>  $indexes
+     */
+    protected function applyDnsStatuses(array $indexes, Server $server): void
+    {
+        $entries = [];
+
+        foreach ($indexes as $index) {
+            $entries[(string) $index] = $this->domainRows[$index]['url'];
+        }
+
+        $results = CheckDomainDns::run($entries, $server, $this->serverIp);
+
+        foreach ($results as $index => $result) {
+            $index = (int) $index;
+            $this->domainRows[$index]['dns_status'] = $result['status'];
+            $this->domainRows[$index]['dns_message'] = $result['message'];
+
+            // Keep suggested-row copy short after DNS checks (no role badge).
+            if ($this->domainRows[$index]['is_suggested'] ?? false) {
+                $isWww = str_starts_with(strtolower((string) $this->domainHost((string) $this->domainRows[$index]['url'])), 'www.');
+                $serviceName = $this->domainRows[$index]['service'] ?? null;
+                $meta = $this->suggestedDomainMeta(
+                    $isWww,
+                    $this->serviceRedirectFor(is_string($serviceName) ? $serviceName : null)
+                );
+                $this->domainRows[$index]['dns_message'] = $meta['pending_message'];
+                $this->domainRows[$index]['suggestion_label'] = null;
+                $this->domainRows[$index]['suggestion_role'] = $meta['role'];
+            }
+
+            $this->domainRows[$index]['expected_ip'] = $result['expected_ip'];
+            $this->domainRows[$index]['checked_at'] = $result['checked_at'];
+            $this->domainRows[$index]['check_id'] = null;
+        }
+    }
+
+    /**
+     * Persist current domain row DNS results and drop statuses for removed domains.
+     *
+     * @param  array<int, string>  $startingCheckKeys  Status keys whose check is being started by this call.
+     *                                                 They are allowed to replace a stored completed result.
+     */
+    protected function persistDomainDnsStatuses(array $startingCheckKeys = []): void
+    {
+        $statuses = [];
+
+        foreach ($this->domainRows as $row) {
+            $url = $row['url'] ?? null;
+            if (! is_string($url) || $url === '') {
+                continue;
+            }
+
+            $status = $row['dns_status'] ?? 'pending';
+            if ($status === 'pending') {
+                // Keep previously stored value for unchecked domains if present.
+                $key = $this->domainDnsStatusKey($url, $row['service'] ?? null);
+                $existing = data_get($this->storedDomainDnsStatuses(), $key);
+                if (is_array($existing) && filled(data_get($existing, 'status'))) {
+                    $statuses[$key] = $existing;
+                }
+
+                continue;
+            }
+
+            $key = $this->domainDnsStatusKey($url, $row['service'] ?? null);
+            $statuses[$key] = [
+                'status' => $status,
+                'message' => (string) ($row['dns_message'] ?? ''),
+                'expected_ip' => $row['expected_ip'] ?? $this->serverIp,
+                'checked_at' => $row['checked_at'] ?? now()->toIso8601String(),
+                'check_id' => $row['check_id'] ?? null,
+            ];
+        }
+
+        DB::transaction(function () use (&$statuses, $startingCheckKeys): void {
+            $application = Application::query()->lockForUpdate()->findOrFail($this->resource()->id);
+            $storedStatuses = $application->domain_dns_statuses ?? [];
+
+            foreach ($statuses as $key => $status) {
+                if (in_array($key, $startingCheckKeys, true)) {
+                    continue;
+                }
+
+                $localCheckId = $status['check_id'] ?? null;
+                $storedCheckId = $storedStatuses[$key]['check_id'] ?? null;
+
+                if ($storedCheckId !== null && $localCheckId !== $storedCheckId) {
+                    $statuses[$key] = $storedStatuses[$key];
+
+                    continue;
+                }
+
+                if ($status['status'] === 'checking' && isset($storedStatuses[$key]) && $storedStatuses[$key]['status'] !== 'checking') {
+                    $statuses[$key] = $storedStatuses[$key];
+                }
+            }
+
+            $application->domain_dns_statuses = $statuses === [] ? null : $statuses;
+            $application->save();
+        });
+
+        if (array_key_exists('domain_dns_statuses', $this->resource()->getAttributes())) {
+            $this->resource()->domain_dns_statuses = $statuses === [] ? null : $statuses;
+        }
+    }
+
+    protected function pruneDomainDnsStatusesToCurrentDomains(): void
+    {
+        $this->resource()->refresh();
+        // Rebuild rows from current domain list, keep only matching stored keys.
+        $this->domainRows = $this->buildDomainRows();
+        $this->persistDomainDnsStatuses();
+    }
+
+    /**
+     * Human-readable DNS target: real IP, with configured hostname when it differs.
+     */
+    public function dnsTargetLabel(): ?string
+    {
+        if (blank($this->serverIp)) {
+            return $this->serverIpConfigured;
+        }
+
+        if (
+            filled($this->serverIpConfigured)
+            && $this->serverIpConfigured !== $this->serverIp
+            && filter_var($this->serverIpConfigured, FILTER_VALIDATE_IP) === false
+        ) {
+            return "{$this->serverIp} ({$this->serverIpConfigured})";
+        }
+
+        return $this->serverIp;
+    }
+
+    public function updatedNewDomain(): void
+    {
+        $this->resetAddDomainDnsGate();
+    }
+
+    public function updatedNewDomainParts(): void
+    {
+        $this->newDomainPartsChanged = true;
+        $this->resetAddDomainDnsGate();
+    }
+
+    public function resetAddDomainDnsGate(): void
+    {
+        $this->addDomainDnsFailed = false;
+        $this->addDomainDnsMessage = '';
+        $this->forceSaveDns = false;
+    }
+
+    public function resetAddDomainForm(): void
+    {
+        $this->newDomain = '';
+        $this->newDomainParts = DomainUrlParts::empty();
+        $this->newDomainPartsChanged = false;
+        $this->resetAddDomainDnsGate();
+        $this->resetErrorBag('newDomain');
+    }
+
+    public function confirmAddDomainDespiteDns(): void
+    {
+        $this->forceSaveDns = true;
+        $this->addDomain();
+    }
+
+    public function confirmDomainUsage(): void
+    {
+        $this->forceSaveDomains = true;
+        $this->showDomainConflictModal = false;
+
+        if ($this->pendingAction === 'update') {
+            $this->updateDomain();
+
+            return;
+        }
+
+        if ($this->pendingAction === 'suggested') {
+            $this->addSuggestedDomain((int) ($this->editingIndex ?? -1));
+
+            return;
+        }
+
+        if ($this->pendingAction === 'redirect') {
+            if ($this->isCompose && filled($this->pendingRedirectService)) {
+                $this->setServiceRedirect($this->pendingRedirectService);
+
+                return;
+            }
+
+            $this->setRedirect();
+
+            return;
+        }
+
+        $this->addDomain();
+    }
+
+    public function addDomain(): void
+    {
+        try {
+            $this->authorize('update', $this->resource());
+
+            if ($this->isApplication() && $this->labelsAreWritable) {
+                $this->dispatch('error', 'Domains cannot be edited while container labels are writable. Set domains in the Labels section on General.');
+
+                return;
+            }
+
+            if ($this->newDomainPartsChanged || filled($this->newDomainParts['host'] ?? null)) {
+                $this->newDomain = DomainUrlParts::compose(...$this->newDomainParts);
+            }
+            $this->validateOnly('newDomain');
+
+            $normalized = ValidationPatterns::normalizeApplicationDomains($this->newDomain);
+            if (blank($normalized)) {
+                $this->addError('newDomain', 'Please enter a valid domain URL.');
+
+                return;
+            }
+
+            $newUrls = $this->splitDomains($normalized);
+            // A database is not reached over HTTP, so it has no www counterpart.
+            $pairedUrls = $this->isApplication()
+                ? collect($newUrls)
+                    ->map(fn (string $url) => $this->wwwCounterpartUrl($url))
+                    ->filter()
+                    ->values()
+                    ->all()
+                : [];
+            $current = $this->currentDomainList($this->newDomainService);
+            $currentCanonicalDomains = $current->map(
+                fn (string $url): string => DomainPortOverrides::withoutPort($url)
+            );
+
+            foreach ($newUrls as $url) {
+                if ($currentCanonicalDomains->contains(DomainPortOverrides::withoutPort($url))) {
+                    $this->addError('newDomain', "Domain {$url} is already configured.");
+
+                    return;
+                }
+            }
+
+            if ($this->isApplication() && $this->shouldConfirmPort($this->portFromParts($this->newDomainParts), serviceName: $this->newDomainService)) {
+                $this->openPortWarning($this->portFromParts($this->newDomainParts), 'add');
+
+                return;
+            }
+
+            $merged = $current->merge($newUrls)->merge($pairedUrls)->unique()->values();
+            $this->pendingAction = 'add';
+            if (! $this->saveDomainList($merged, $this->newDomainService)) {
+                return;
+            }
+
+            $this->forceSaveDomains = false;
+            $this->pendingAction = null;
+            $this->forceUseUnknownPort = false;
+            $serviceForCheck = $this->newDomainService;
+            $this->resetAddDomainForm();
+            $this->dispatch('close-modal');
+            $this->refreshDomains();
+            $addedUrls = array_values(array_unique(array_merge($newUrls, $pairedUrls)));
+            if ($this->configureDnsAfterDomainAdd($addedUrls)) {
+                $this->dispatch('success', 'Domain added.');
+
+                return;
+            }
+
+            $dnsChecks = collect($this->dnsEntriesForUrls($addedUrls, $serviceForCheck))
+                ->map(fn (string $url, string $statusKey) => [
+                    'status_key' => $statusKey,
+                    'url' => $url,
+                    'check_id' => new_public_id(),
+                ]);
+
+            foreach ($dnsChecks as $dnsCheck) {
+                $this->markUrlsAsChecking([$dnsCheck['url']], $serviceForCheck, $dnsCheck['check_id']);
+            }
+            $this->persistDomainDnsStatuses($dnsChecks->pluck('status_key')->all());
+
+            $failedDnsChecks = 0;
+            foreach ($dnsChecks as $dnsCheck) {
+                try {
+                    CheckDomainDnsJob::dispatch(
+                        $this->resource(),
+                        $dnsCheck['status_key'],
+                        $dnsCheck['url'],
+                        $this->resource()->destination?->server,
+                        $this->serverIp,
+                        $dnsCheck['check_id'],
+                        $this->hasAdditionalServers(),
+                    );
+                } catch (\Throwable) {
+                    $failedDnsChecks++;
+                    $this->markUrlsDnsCheckUnavailable([$dnsCheck['url']], $serviceForCheck, $dnsCheck['check_id']);
+                }
+            }
+
+            if ($failedDnsChecks > 0) {
+                $this->persistDomainDnsStatuses();
+                $this->dispatch('error', 'Some DNS checks could not be started. Try again from the Domains page.');
+            }
+
+            $this->dispatch('success', $failedDnsChecks === $dnsChecks->count()
+                ? 'Domain added.'
+                : 'Domain added. DNS check started.');
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
+    }
+
+    /**
+     * @param  array<int, string>  $urls
+     */
+    protected function markUrlsAsChecking(array $urls, ?string $service = null, ?string $checkId = null): void
+    {
+        $indexesToCheck = [];
+
+        foreach ($this->domainRows as $index => $row) {
+            if (! in_array($row['url'], $urls, true)) {
+                continue;
+            }
+
+            if ($service !== null && ($row['service'] ?? null) !== $service) {
+                continue;
+            }
+
+            $this->domainRows[$index]['dns_status'] = 'checking';
+            $this->domainRows[$index]['dns_message'] = 'Checking DNS...';
+            $this->domainRows[$index]['check_id'] = $checkId;
+        }
+    }
+
+    /**
+     * @param  array<int, string>  $urls
+     */
+    protected function markUrlsDnsCheckUnavailable(array $urls, ?string $service = null, ?string $checkId = null): void
+    {
+        $this->markUrlsAsChecking($urls, $service, $checkId);
+
+        foreach ($this->domainRows as $index => $row) {
+            if (! in_array($row['url'], $urls, true)) {
+                continue;
+            }
+
+            if ($service !== null && ($row['service'] ?? null) !== $service) {
+                continue;
+            }
+
+            $this->domainRows[$index]['dns_status'] = 'skipped';
+            $this->domainRows[$index]['dns_message'] = 'DNS check could not be started.';
+            $this->domainRows[$index]['checked_at'] = now()->toIso8601String();
+        }
+    }
+
+    /**
+     * @param  array<int, string>  $urls
+     * @return array<string, string>
+     */
+    protected function dnsEntriesForUrls(array $urls, ?string $service = null): array
+    {
+        $entries = [];
+
+        foreach ($urls as $url) {
+            $entries[$this->domainDnsStatusKey($url, $service)] = $url;
+        }
+
+        return $entries;
+    }
+
+    /**
+     * Run a first-time DNS check for newly added/updated domain URLs and persist results.
+     *
+     * @param  array<int, string>  $urls
+     */
+    protected function checkUrlsDns(array $urls, ?string $service = null): void
+    {
+        if ($urls === []) {
+            return;
+        }
+
+        $urlSet = array_fill_keys($urls, true);
+        $server = $this->resource()->destination?->server;
+        $skipDns = ! $this->dnsValidationEnabled
+            || ! $server
+            || $this->hasAdditionalServers();
+        $indexesToCheck = [];
+
+        foreach ($this->domainRows as $index => $row) {
+            $url = $row['url'] ?? null;
+            if (! is_string($url) || ! isset($urlSet[$url])) {
+                continue;
+            }
+
+            if ($service !== null && ($row['service'] ?? null) !== $service) {
+                continue;
+            }
+
+            if ($skipDns) {
+                $reason = ! $this->dnsValidationEnabled
+                    ? 'DNS validation is disabled in instance settings.'
+                    : ($this->hasAdditionalServers()
+                        ? 'DNS check skipped for multi-server applications.'
+                        : 'No server available for DNS validation.');
+
+                $this->domainRows[$index]['dns_status'] = 'skipped';
+                $this->domainRows[$index]['dns_message'] = $reason;
+                $this->domainRows[$index]['checked_at'] = now()->toIso8601String();
+                $this->domainRows[$index]['expected_ip'] = $this->serverIp;
+
+                continue;
+            }
+
+            $indexesToCheck[] = $index;
+        }
+
+        if ($server && $indexesToCheck !== []) {
+            $this->applyDnsStatuses($indexesToCheck, $server);
+        }
+
+        $this->persistDomainDnsStatuses();
+    }
+
+    /**
+     * @param  array<int, string>  $urls
+     */
+    protected function queueUrlsDns(array $urls, ?string $service = null): void
+    {
+        foreach ($this->dnsEntriesForUrls($urls, $service) as $statusKey => $url) {
+            $checkId = new_public_id();
+            $this->markUrlsAsChecking([$url], $service, $checkId);
+            $this->persistDomainDnsStatuses([$statusKey]);
+
+            try {
+                CheckDomainDnsJob::dispatch(
+                    $this->resource(),
+                    $statusKey,
+                    $url,
+                    $this->resource()->destination?->server,
+                    $this->serverIp,
+                    $checkId,
+                    $this->hasAdditionalServers(),
+                );
+            } catch (\Throwable) {
+                $this->markUrlsDnsCheckUnavailable([$url], $service, $checkId);
+                $this->persistDomainDnsStatuses();
+                $this->dispatch('error', 'The DNS check could not be started. Try again from the Domains page.');
+            }
+        }
+    }
+
+    protected function shouldValidateDnsForAdd(): bool
+    {
+        if (! $this->dnsValidationEnabled) {
+            return false;
+        }
+
+        $server = $this->resource()->destination?->server;
+        if (! $server) {
+            return false;
+        }
+
+        if ($this->hasAdditionalServers()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<int, string>  $urls
+     */
+    protected function findDnsFailureMessage(array $urls): ?string
+    {
+        $server = $this->resource()->destination?->server;
+        if (! $server) {
+            return null;
+        }
+
+        $results = CheckDomainDns::run(array_combine($urls, $urls), $server, $this->serverIp);
+
+        foreach ($results as $result) {
+            if ($result['status'] === 'failed') {
+                return $result['message'];
+            }
+        }
+
+        return null;
+    }
+
+    public function updatedEditingDomain(): void
+    {
+        $this->resetEditDomainDnsGate();
+    }
+
+    public function updatedEditingDomainParts(): void
+    {
+        $this->editingDomainPartsChanged = true;
+        $this->resetEditDomainDnsGate();
+    }
+
+    public function resetEditDomainDnsGate(): void
+    {
+        $this->editDomainDnsFailed = false;
+        $this->editDomainDnsMessage = '';
+        $this->forceSaveEditDns = false;
+    }
+
+    public function startEdit(int $index): void
+    {
+        if (! isset($this->domainRows[$index]) || ($this->domainRows[$index]['is_suggested'] ?? false)) {
+            return;
+        }
+
+        $this->editingIndex = $index;
+        $this->editingDomain = $this->domainRows[$index]['url'];
+        $this->editingDomainParts = DomainUrlParts::split($this->editingDomain);
+        $canonical = DomainPortOverrides::withoutPort($this->editingDomain);
+        $savedPort = ($this->resource()->domain_port_overrides ?? [])[$canonical] ?? null;
+        if (filled($savedPort)) {
+            $this->editingDomainParts['port'] = (string) $savedPort;
+        }
+        $this->editingDomainPartsChanged = false;
+        $this->editingService = $this->domainRows[$index]['service'];
+        $this->editingIndexing = $this->resource()->isDomainNoindexed($this->editingDomain) ? 'noindex' : 'index';
+        $this->editingRedirect = $this->isApplication() ? $this->serviceRedirectFor($this->editingService) : 'both';
+        $this->editingOriginalRedirect = $this->editingRedirect;
+        $this->editingDomainWasRegenerated = false;
+        $this->editingGeneratedHost = null;
+        $this->resetEditDomainDnsGate();
+        $this->resetErrorBag('editingDomain');
+        $this->showEditDomainModal = true;
+        $this->dispatch('open-edit-domain');
+    }
+
+    public function cancelEdit(): void
+    {
+        $this->showEditDomainModal = false;
+        $this->editingIndex = null;
+        $this->editingDomain = '';
+        $this->editingDomainParts = DomainUrlParts::empty();
+        $this->editingDomainPartsChanged = false;
+        $this->editingService = null;
+        $this->editingIndexing = 'index';
+        $this->editingRedirect = 'both';
+        $this->editingOriginalRedirect = 'both';
+        $this->editingDomainWasRegenerated = false;
+        $this->editingGeneratedHost = null;
+        $this->resetEditDomainDnsGate();
+        $this->resetErrorBag('editingDomain');
+        if ($this->pendingAction === 'update') {
+            $this->pendingAction = null;
+            $this->forceSaveDomains = false;
+            $this->showDomainConflictModal = false;
+        }
+    }
+
+    public function confirmUpdateDomainDespiteDns(): void
+    {
+        $this->forceSaveEditDns = true;
+        $this->updateDomain();
+    }
+
+    public function updateDomain(): void
+    {
+        try {
+            $this->authorize('update', $this->resource());
+
+            if ($this->isApplication() && $this->labelsAreWritable) {
+                $this->dispatch('error', 'Domains cannot be edited while container labels are writable.');
+
+                return;
+            }
+
+            if ($this->editingIndex === null || ! isset($this->domainRows[$this->editingIndex])) {
+                return;
+            }
+
+            if ($this->editingDomainPartsChanged || filled($this->editingDomainParts['host'] ?? null)) {
+                $this->editingDomain = DomainUrlParts::compose(...$this->editingDomainParts);
+            }
+            $this->validateOnly('editingDomain');
+            $this->validateOnly('editingIndexing');
+            $this->validateOnly('editingRedirect');
+
+            $normalized = ValidationPatterns::normalizeApplicationDomains($this->editingDomain);
+            if (blank($normalized) || count($this->splitDomains($normalized)) !== 1) {
+                $this->addError('editingDomain', 'Please enter a single valid domain URL.');
+
+                return;
+            }
+
+            $newUrl = $this->splitDomains($normalized)[0];
+            $oldUrl = $this->domainRows[$this->editingIndex]['url'];
+            $service = $this->editingService;
+            if (blank(DomainUrlParts::split($newUrl)['port'] ?? null)) {
+                $portOverrides = $this->resource()->domain_port_overrides ?? [];
+                unset($portOverrides[DomainPortOverrides::withoutPort($oldUrl)]);
+                unset($portOverrides[DomainPortOverrides::withoutPort($newUrl)]);
+                $this->resource()->domain_port_overrides = $portOverrides ?: null;
+            }
+
+            $current = $this->currentDomainList($service);
+            $otherCanonicalDomains = $current
+                ->reject(fn (string $url): bool => $url === $oldUrl)
+                ->map(fn (string $url): string => DomainPortOverrides::withoutPort($url));
+            if ($otherCanonicalDomains->contains(DomainPortOverrides::withoutPort($newUrl))) {
+                $this->addError('editingDomain', "Domain {$newUrl} is already configured.");
+
+                return;
+            }
+
+            if ($this->isApplication() && $this->shouldConfirmPort($this->portFromParts($this->editingDomainParts), $this->currentRowPort($oldUrl), $service)) {
+                $this->openPortWarning($this->portFromParts($this->editingDomainParts), 'update');
+
+                return;
+            }
+
+            $replacements = [$oldUrl => $newUrl];
+            if ($this->editingDomainWasRegenerated && filled($this->editingGeneratedHost) && in_array($this->editingRedirect, ['www', 'non-www'], true)) {
+                $oldCounterpartHost = parse_url((string) $this->wwwCounterpartUrl($oldUrl, true), PHP_URL_HOST);
+                $oldCounterpart = $current->first(fn (string $url): bool => parse_url($url, PHP_URL_HOST) === $oldCounterpartHost);
+                if (is_string($oldCounterpart)) {
+                    $counterpartParts = DomainUrlParts::split($oldCounterpart);
+                    $counterpartPort = $this->currentRowPort($oldCounterpart);
+                    if ($counterpartPort !== null) {
+                        $counterpartParts['port'] = (string) $counterpartPort;
+                    }
+                    $counterpartParts['host'] = str_starts_with(strtolower($counterpartParts['host']), 'www.')
+                        ? 'www.'.$this->editingGeneratedHost
+                        : $this->editingGeneratedHost;
+                    $replacements[$oldCounterpart] = DomainUrlParts::compose(...$counterpartParts);
+                }
+            }
+
+            $updated = $current->map(fn (string $url) => $replacements[$url] ?? $url)->unique()->values();
+            if ($this->editingRedirect !== $this->editingOriginalRedirect && in_array($this->editingRedirect, ['www', 'non-www'], true)) {
+                foreach ($updated->all() as $url) {
+                    $counterpart = $this->wwwCounterpartUrl($url, true);
+                    $counterpartHost = is_string($counterpart) ? parse_url($counterpart, PHP_URL_HOST) : null;
+                    $hasCounterpart = filled($counterpartHost) && $updated->contains(
+                        fn (string $candidate): bool => parse_url($candidate, PHP_URL_HOST) === $counterpartHost
+                    );
+                    if (filled($counterpart) && ! $hasCounterpart) {
+                        $updated->push($counterpart);
+                    }
+                }
+            }
+            $urlsToCheck = $updated
+                ->reject(fn (string $url): bool => $current->contains(
+                    fn (string $existingUrl): bool => ! DomainUrlParts::hasDnsRelevantChange($existingUrl, $url)
+                ))
+                ->map(fn (string $url): string => DomainPortOverrides::withoutPort($url))
+                ->unique()
+                ->values()
+                ->all();
+
+            $noindexDomains = $this->resource()->noindexDomains();
+            foreach ($replacements as $previousUrl => $replacementUrl) {
+                $wasNoindexed = $previousUrl === $oldUrl
+                    ? $this->editingIndexing === 'noindex'
+                    : $this->resource()->isDomainNoindexed($previousUrl);
+                $noindexDomains = $noindexDomains->reject(fn (string $domain): bool => $domain === $previousUrl);
+                if ($wasNoindexed) {
+                    $noindexDomains->push($replacementUrl);
+                }
+            }
+            if ($this->isCompose) {
+                $allDomains = json_decode($this->resource()->docker_compose_domains ?: '[]', true);
+                $existing = is_array($allDomains[$service] ?? null) ? $allDomains[$service] : [];
+                $allDomains[$service] = array_merge($existing, ['redirect' => $this->editingRedirect]);
+                $this->resource()->docker_compose_domains = json_encode($allDomains);
+            } else {
+                $this->resource()->redirect = $this->editingRedirect;
+            }
+
+            $this->pendingAction = 'update';
+            $previousDnsHostnames = $this->managedDnsHostnamesOf($this->resource());
+            if (! $this->saveDomainList($updated, $service, noindexDomains: $noindexDomains)) {
+                return;
+            }
+
+            $this->releaseManagedDnsForEditedDomains($this->resource(), $previousDnsHostnames);
+            $this->resetDefaultLabels();
+
+            $this->forceSaveDomains = false;
+            $this->pendingAction = null;
+            $this->forceUseUnknownPort = false;
+            $this->cancelEdit();
+            $this->dispatch('edit-domain-saved');
+            $this->dispatch('success', 'Domain updated.');
+            $this->refreshDomains();
+            if ($urlsToCheck !== []) {
+                $this->queueUrlsDns($urlsToCheck, $service);
+            }
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
+    }
+
+    public function removeDomain(int $index, string $password = '', array $selectedActions = []): void
+    {
+        try {
+            $this->authorize('update', $this->resource());
+
+            if ($this->isApplication() && $this->labelsAreWritable) {
+                $this->dispatch('error', 'Domains cannot be edited while container labels are writable.');
+
+                return;
+            }
+
+            if (! isset($this->domainRows[$index]) || ($this->domainRows[$index]['is_suggested'] ?? false)) {
+                return;
+            }
+
+            $url = $this->domainRows[$index]['url'];
+            $service = $this->domainRows[$index]['service'];
+            $updated = $this->currentDomainList($service)->reject(fn (string $item) => $item === $url)->values();
+
+            if (! $this->saveDomainList($updated, $service, checkConflicts: false)) {
+                return;
+            }
+
+            $this->releaseManagedDnsForUrl($url, $this->resource(), in_array('deleteManagedDns', $selectedActions, true));
+
+            if ($this->editingIndex === $index) {
+                $this->cancelEdit();
+            }
+
+            $this->dispatch('success', 'Domain removed.');
+            $this->refreshDomains();
+            $this->pruneDomainDnsStatusesToCurrentDomains();
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
+    }
+
+    public function removeDomainByKey(string $domainKey, string $password = '', array $selectedActions = []): void
+    {
+        $index = collect($this->domainRows)->search(
+            fn (array $row): bool => ! ($row['is_suggested'] ?? false)
+                && hash_equals($domainKey, $this->domainRowKey($row))
+        );
+
+        if ($index === false) {
+            return;
+        }
+
+        $this->removeDomain((int) $index, $password, $selectedActions);
+    }
+
+    /**
+     * @param  array{url: string, service?: ?string}  $row
+     */
+    private function domainRowKey(array $row): string
+    {
+        return hash('sha256', $row['url'].'|'.($row['service'] ?? ''));
+    }
+
+    protected function dnsResourceForHostname(string $hostname): ?Model
+    {
+        return $this->resource();
+    }
+
+    protected function domainHost(string $url): ?string
+    {
+        try {
+            $host = parse_url($url, PHP_URL_HOST);
+
+            return is_string($host) && $host !== '' ? $host : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return Collection<int, string>
+     */
+    protected function currentDomainList(?string $serviceName = null): Collection
+    {
+        if ($this->isCompose) {
+            $domains = $this->resource()->docker_compose_domains
+                ? json_decode($this->resource()->docker_compose_domains, true)
+                : [];
+
+            if (! is_array($domains)) {
+                $domains = [];
+            }
+
+            $domainString = is_array($domains[$serviceName] ?? null)
+                ? ($domains[$serviceName]['domain'] ?? null)
+                : null;
+
+            return collect($this->splitDomains(is_string($domainString) ? $domainString : null));
+        }
+
+        return collect($this->splitDomains($this->resourceFqdn()));
+    }
+
+    /**
+     * @param  Collection<int, string>  $domains
+     */
+    protected function saveDomainList(
+        Collection $domains,
+        ?string $serviceName = null,
+        bool $checkConflicts = true,
+        ?Collection $noindexDomains = null,
+    ): bool {
+        $domainString = $domains->filter()->unique()->implode(',');
+        $domainString = $domainString === '' ? null : ValidationPatterns::normalizeApplicationDomains($domainString);
+
+        if ($domainString) {
+            $errors = ValidationPatterns::validateApplicationDomains($domainString);
+            if ($errors !== []) {
+                $this->dispatch('error', $errors[0]);
+
+                return false;
+            }
+        }
+
+        $intendedComposeOverrides = null;
+
+        if ($this->isCompose) {
+            if (blank($serviceName)) {
+                $this->dispatch('error', 'A service is required for compose domains.');
+
+                return false;
+            }
+
+            $allDomains = $this->resource()->docker_compose_domains
+                ? json_decode($this->resource()->docker_compose_domains, true)
+                : [];
+
+            if (! is_array($allDomains)) {
+                $allDomains = [];
+            }
+
+            $previousServiceUrls = $this->currentDomainList($serviceName);
+            $normalizedPorts = DomainPortOverrides::normalize($domainString, $this->resource()->domain_port_overrides);
+            $domainString = $normalizedPorts['fqdn'];
+            $intendedComposeOverrides = $this->mergeComposeDomainPortOverrides(
+                $previousServiceUrls,
+                $domainString,
+                $normalizedPorts['overrides'] ?? null,
+            );
+
+            $existing = is_array($allDomains[$serviceName] ?? null) ? $allDomains[$serviceName] : [];
+            // Preserve stored redirect only — pending Direction dropdown values must not
+            // persist until setServiceRedirect() runs.
+            $allDomains[$serviceName] = array_merge($existing, [
+                'domain' => $domainString,
+            ]);
+
+            $this->resource()->docker_compose_domains = json_encode($allDomains);
+            $this->resource()->domain_port_overrides = $intendedComposeOverrides;
+            $this->setResourceFqdn(null);
+        } else {
+            $this->setResourceFqdn($domainString);
+        }
+
+        if ($noindexDomains !== null) {
+            $this->resource()->setNoindexDomains($noindexDomains);
+        }
+
+        if ($checkConflicts && ! $this->forceSaveDomains && $this->isApplication()) {
+            $result = checkDomainUsage(resource: $this->resource());
+            if ($result['hasConflicts']) {
+                $this->domainConflicts = $result['conflicts'];
+                $this->showDomainConflictModal = true;
+
+                // Revert in-memory mutation so a cancelled conflict leaves model clean
+                $this->resource()->refresh();
+
+                return false;
+            }
+        } else {
+            $this->forceSaveDomains = false;
+        }
+
+        $warning = sslipDomainWarning($domainString ?? '');
+        if ($warning) {
+            $this->dispatch('warning', __('warning.sslipdomain'));
+        }
+
+        $this->resource()->save();
+
+        if ($this->isCompose && ($this->resource()->domain_port_overrides ?? null) !== $intendedComposeOverrides) {
+            $this->resource()->domain_port_overrides = $intendedComposeOverrides;
+            $this->resource()->save();
+        }
+
+        $this->resetDefaultLabels();
+        $this->dispatch('configurationChanged');
+
+        return true;
+    }
+
+    protected function authorizeUpdateForDomainConnect(): void
+    {
+        $this->authorize('update', $this->resource());
+    }
+
+    protected function usesInstanceNetworkAddressesForDnsHints(): bool
+    {
+        return $this->resource()->destination?->server?->id === 0;
+    }
+
+}

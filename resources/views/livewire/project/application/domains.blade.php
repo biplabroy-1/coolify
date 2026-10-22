@@ -54,9 +54,9 @@
             @unless ($isCompose)
                 <a class="mt-2 block font-medium underline"
                     href="{{ route('project.application.configuration', [
-                        'project_uuid' => data_get($application, 'environment.project.uuid'),
-                        'environment_uuid' => data_get($application, 'environment.uuid'),
-                        'application_uuid' => $application->uuid,
+                        'project_uuid' => data_get($this->resource(), 'environment.project.uuid'),
+                        'environment_uuid' => data_get($this->resource(), 'environment.uuid'),
+                        'application_uuid' => $this->isApplication() ? $this->resource()->uuid : null,
                     ]) }}#container-labels-section"
                     {{ wireNavigate() }}>
                     Go to Container labels
@@ -72,7 +72,7 @@
         </x-callout>
     @endif
 
-    @cannot('update', $application)
+    @cannot('update', $this->resource())
         <x-callout type="danger" title="Insufficient permissions">
             You don't have permission to manage domains. Contact your team administrator for access.
         </x-callout>
@@ -89,7 +89,7 @@
             </div>
         @endif
         <div class="ml-auto flex flex-wrap items-center gap-2">
-            @can('update', $application)
+            @can('update', $this->resource())
                 <x-forms.button wire:click="checkAllDns" :showLoadingIndicator="false" wire:loading.attr="disabled" wire:target="checkAllDns,checkDomainDns">
                     <x-reicon name="refresh" class="size-3.5" />
                     Check all DNS
@@ -100,7 +100,7 @@
                 @unless ($labelsAreWritable)
                     @if (! $isCompose || count($composeServices) > 0)
                         <x-modal-input title="Add domain" :closeOutside="false" :wireIgnore="false"
-                            canGate="update" :canResource="$application">
+                            canGate="update" :canResource="$this->resource()">
                             <x-slot:content>
                                 <button type="button"
                                     class="button button-highlighted">
@@ -110,12 +110,12 @@
                             </x-slot:content>
                             <form wire:submit="addDomain" class="application-settings-form flex flex-col gap-4">
                                 @if ($isCompose && count($composeServices) > 0)
-                                    <x-forms.listbox canGate="update" :canResource="$application" label="Service" id="newDomainService" required
+                                    <x-forms.listbox canGate="update" :canResource="$this->resource()" label="Service" id="newDomainService" required
                                         :options="collect($composeServices)->map(fn ($serviceName) => [
                                             'value' => $serviceName,
                                             'label' => $serviceName,
                                         ])->values()->all()"
-                                        :disabled="! auth()->user()->can('update', $application)" />
+                                        :disabled="! auth()->user()->can('update', $this->resource())" />
                                 @endif
 
                                 <x-forms.domain-input id="newDomainParts" errorId="newDomain" />
@@ -161,23 +161,23 @@
                 <label for="isForceHttpsEnabled-trigger" class="mb-0! text-[12px]!">Redirect HTTP to HTTPS</label>
                 <x-helper helper="Disable only when Cloudflare Tunnel or another proxy connects to Coolify over HTTP. Keep enabled when Cloudflare uses Full or Full (Strict) SSL." />
                 <div class="w-28 shrink-0">
-                    <x-forms.listbox canGate="update" :canResource="$application" id="isForceHttpsEnabled"
+                    <x-forms.listbox canGate="update" :canResource="$this->resource()" id="isForceHttpsEnabled"
                         onChange="updateForceHttps" portal
                         :options="[
                             ['value' => true, 'label' => 'Enabled'],
                             ['value' => false, 'label' => 'Disabled'],
-                        ]" :disabled="! auth()->user()->can('update', $application)" />
+                        ]" :disabled="! auth()->user()->can('update', $this->resource())" />
                 </div>
             @endif
             <label for="isPermanentRedirectEnabled-trigger" class="mb-0! text-[12px]!">Redirect type</label>
             <x-helper helper="Applies to the HTTP to HTTPS and www redirects. Permanent (301/308) is better for SEO, but browsers cache it. Use Temporary (302/307) while you test a redirect." />
             <div class="w-32 shrink-0">
-                <x-forms.listbox canGate="update" :canResource="$application" id="isPermanentRedirectEnabled"
+                <x-forms.listbox canGate="update" :canResource="$this->resource()" id="isPermanentRedirectEnabled"
                     onChange="updatePermanentRedirect" portal
                     :options="[
                         ['value' => false, 'label' => 'Temporary'],
                         ['value' => true, 'label' => 'Permanent'],
-                    ]" :disabled="! auth()->user()->can('update', $application)" />
+                    ]" :disabled="! auth()->user()->can('update', $this->resource())" />
             </div>
         </div>
     @endif
@@ -253,7 +253,7 @@
                                 @include('livewire.project.application.partials.domain-row', [
                                     'index' => $index,
                                     'row' => $row,
-                                    'application' => $application,
+                                    'application' => $this->resource(),
                                     'labelsAreWritable' => $labelsAreWritable,
                                     'isCompose' => true,
                                 ])
@@ -274,7 +274,7 @@
                     @include('livewire.project.application.partials.domain-row', [
                         'index' => $index,
                         'row' => $row,
-                        'application' => $application,
+                        'application' => $this->resource(),
                         'labelsAreWritable' => $labelsAreWritable,
                         'isCompose' => false,
                     ])
@@ -342,7 +342,7 @@
                                 @endif
 
                                 @unless ($labelsAreWritable)
-                                    @can('update', $application)
+                                    @can('update', $this->resource())
                                         <div
                                             class="grid grid-cols-1 gap-4 border-t border-neutral-200 pt-4 sm:grid-cols-2 dark:border-white/10">
                                         <x-forms.listbox id="editingIndexing"
@@ -421,12 +421,12 @@
                             </x-callout>
 
                             <div class="mt-4 flex flex-wrap justify-end gap-2 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
-                                <x-forms.button type="button" canGate="update" :canResource="$application"
+                                <x-forms.button type="button" canGate="update" :canResource="$this->resource()"
                                     @click="modalOpen = false; $wire.call('cancelUseUnknownPort')">
                                     Cancel
                                 </x-forms.button>
                                 <x-forms.button type="button" wire:click="confirmUseUnknownPort" canGate="update"
-                                    :canResource="$application"
+                                    :canResource="$this->resource()"
                                     @click="modalOpen = false" isError>
                                     Use this port anyway
                                 </x-forms.button>

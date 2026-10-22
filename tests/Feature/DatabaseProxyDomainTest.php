@@ -258,7 +258,7 @@ test('the domains page adds a domain to the database', function () {
     ]);
 
     Livewire::test(DatabaseDomains::class, ['database' => $database])
-        ->set('newDomain', 'db.example.com')
+        ->set('newDomainParts.host', 'db.example.com')
         ->call('addDomain')
         ->assertHasNoErrors();
 
