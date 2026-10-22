@@ -15,6 +15,13 @@ class DatabaseProxyProtocol
         public readonly string $name,
         public readonly int $port,
         public readonly int $tlsPort,
+        /**
+         * Whether the proxy can pick the database by the hostname of the TLS handshake. The
+         * client of a MySQL, a MariaDB or a ClickHouse database waits for the plaintext greeting
+         * of the server before it sends the TLS handshake, so there is no hostname to route on and
+         * the database needs a port of its own.
+         */
+        public readonly bool $routesBySni = true,
     ) {}
 
     /**
@@ -24,10 +31,10 @@ class DatabaseProxyProtocol
     {
         return match ($type) {
             'standalone-postgresql', 'standalone-postgis', 'standalone-timescale', 'standalone-supabase/postgres' => new self('postgres', 5432, 5432),
-            'standalone-mysql', 'standalone-mariadb' => new self('mysql', 3306, 3306),
+            'standalone-mysql', 'standalone-mariadb' => new self('mysql', 3306, 3306, false),
             'standalone-redis', 'standalone-keydb', 'standalone-dragonfly' => new self('redis', 6379, 6380),
             'standalone-mongodb' => new self('mongodb', 27017, 27017),
-            'standalone-clickhouse' => new self('clickhouse', 9000, 9000),
+            'standalone-clickhouse' => new self('clickhouse', 9000, 9000, false),
             default => null,
         };
     }

@@ -72,12 +72,12 @@ class StartMongodb
             array_push($this->commands, ...SslHelper::caCertificateFileCommands($caCert->ssl_certificate));
             $this->ssl_certificate = $this->database->sslCertificates()->first();
 
-            if (! $this->ssl_certificate || ($this->database->domain && ! in_array($this->database->domain, $this->ssl_certificate->subject_alternative_names ?? []))) {
+            if (! $this->ssl_certificate || ($this->database->domain && ! in_array('DNS:'.$this->database->domain, $this->ssl_certificate->subject_alternative_names ?? []))) {
                 $this->database->sslCertificates()->delete();
                 $this->commands[] = "echo 'No SSL certificate found, generating new SSL certificate for this database.'";
                 $this->ssl_certificate = SslHelper::generateSslCertificate(
                     commonName: $this->database->uuid,
-                    subjectAlternativeNames: array_filter([$this->database->domain]),
+                    subjectAlternativeNames: array_filter([$this->database->domain ? 'DNS:'.$this->database->domain : null]),
                     resourceType: $this->database->getMorphClass(),
                     resourceId: $this->database->id,
                     serverId: $server->id,

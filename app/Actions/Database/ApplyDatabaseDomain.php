@@ -46,6 +46,15 @@ class ApplyDatabaseDomain
             // The domain replaces the TCP proxy container of the database.
             StopDatabaseProxy::run($database);
 
+            $protocol = $database->proxyProtocol();
+            if ($protocol !== null && ! $protocol->routesBySni && ! $database->proxyPort()) {
+                // The client of this database type waits for the plaintext greeting of the server,
+                // so the proxy cannot pick the database by the hostname of the TLS handshake and
+                // the database gets a port of its own.
+                $database->proxy_port = $database->nextAvailableProxyPort();
+                $database->save();
+            }
+
             $publicCertificate = DatabaseProxyConfiguration::usesPublicCertificate($database);
             if (! $publicCertificate) {
                 // The proxy forwards the encrypted traffic to the database, so the database serves

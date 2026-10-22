@@ -145,6 +145,51 @@ test('the action starts the database proxy', function () {
     Process::assertRan(fn ($process) => str_contains($process->command, 'coolify-db-proxy'));
 });
 
+test('a database that cannot be routed by the hostname gets a port of its own', function () {
+    Process::fake();
+
+    $database = create_standalone_mysql($this->environment->id, $this->destination, [
+        'is_public' => true,
+        'domain' => 'db.example.com',
+        'enable_ssl' => true,
+        'status' => 'running:healthy',
+    ]);
+
+    ApplyDatabaseDomain::run($database);
+
+    expect($database->refresh()->proxy_port)->toBe(3306);
+
+    $routing = DatabaseProxyConfiguration::routing($this->server);
+    $router = $routing['tcp']['routers']['db-'.$database->uuid];
+
+    expect($router)->not->toHaveKey('rule')
+        ->and($router['entryPoints'])->toBe(['db-mysql-3306'])
+        ->and($routing['tcp']['services']['db-'.$database->uuid]['loadBalancer']['servers'][0]['address'])->toBe($database->uuid.':3306');
+});
+
+test('a second database of the same type gets the next free port', function () {
+    Process::fake();
+
+    $first = create_standalone_mysql($this->environment->id, $this->destination, [
+        'is_public' => true,
+        'domain' => 'db1.example.com',
+        'enable_ssl' => true,
+        'status' => 'running:healthy',
+    ]);
+    $second = create_standalone_mysql($this->environment->id, $this->destination, [
+        'is_public' => true,
+        'domain' => 'db2.example.com',
+        'enable_ssl' => true,
+        'status' => 'running:healthy',
+    ]);
+
+    ApplyDatabaseDomain::run($first);
+    ApplyDatabaseDomain::run($second);
+
+    expect($first->refresh()->proxy_port)->toBe(3306)
+        ->and($second->refresh()->proxy_port)->toBe(3307);
+});
+
 test('the general component saves the domain', function () {
     $user = User::factory()->create();
     $this->team->members()->attach($user->id, ['role' => 'owner']);

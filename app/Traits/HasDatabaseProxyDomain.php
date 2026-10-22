@@ -97,6 +97,36 @@ trait HasDatabaseProxyDomain
     }
 
     /**
+     * The port the database proxy publishes for this database. A database without a port shares
+     * the port of its type, and the proxy picks it by the hostname of the TLS handshake.
+     */
+    public function proxyPort(): ?int
+    {
+        return $this->proxy_port ? (int) $this->proxy_port : null;
+    }
+
+    /**
+     * The next free port for the protocol of this database on its server.
+     */
+    public function nextAvailableProxyPort(): int
+    {
+        $protocol = $this->proxyProtocol();
+        $used = $this->proxyServer()?->databases()
+            ->flatMap(fn ($database) => [$database->proxy_port, $database->public_port])
+            ->filter()
+            ->map(fn ($port) => (int) $port)
+            ->all() ?? [];
+
+        for ($port = $protocol->port; $port <= $protocol->port + 100; $port++) {
+            if (! in_array($port, $used, true)) {
+                return $port;
+            }
+        }
+
+        throw new \RuntimeException("No free port for the {$protocol->name} protocol is left on the server.");
+    }
+
+    /**
      * The host a client connects to: the domain when the database is exposed through the proxy,
      * the server address when it is exposed through a TCP proxy container.
      */
@@ -118,7 +148,7 @@ trait HasDatabaseProxyDomain
     public function publicEndpointPort(): ?int
     {
         if ($this->hasProxyDomain()) {
-            return $this->proxyProtocol()?->port;
+            return $this->proxyPort() ?? $this->proxyProtocol()?->port;
         }
 
         return $this->public_port;

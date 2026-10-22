@@ -23,6 +23,7 @@ class ServiceDatabase extends BaseModel
         'image',
         'public_port',
         'domain',
+        'proxy_port',
         'is_public',
         'is_log_drain_enabled',
         'is_include_timestamps',

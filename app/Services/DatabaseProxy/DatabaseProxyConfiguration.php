@@ -54,6 +54,32 @@ class DatabaseProxyConfiguration
     }
 
     /**
+     * The entrypoints of the proxy: the shared port of a protocol and the ports of the databases
+     * that need one of their own.
+     *
+     * @return array<string, array{entrypoint: string, port: int}>
+     */
+    public static function entries(Server $server): array
+    {
+        $entries = [];
+
+        foreach (self::databases($server) as $database) {
+            $protocol = $database->proxyProtocol();
+            if ($protocol === null) {
+                continue;
+            }
+            $dedicatedPort = $database->proxyPort();
+            $name = $dedicatedPort ? "db-{$protocol->name}-{$dedicatedPort}" : $protocol->entrypoint();
+            $entries[$name] = [
+                'entrypoint' => $name,
+                'port' => $dedicatedPort ?? $protocol->port,
+            ];
+        }
+
+        return $entries;
+    }
+
+    /**
      * The static configuration of the proxy container.
      */
     public static function compose(Server $server): array
@@ -65,9 +91,9 @@ class DatabaseProxyConfiguration
             '--certificatesresolvers.'.self::CERTIFICATE_RESOLVER.'.acme.storage=/traefik/acme.json',
         ];
         $ports = [];
-        foreach (self::protocols($server) as $protocol) {
-            $command[] = $protocol->entrypointFlag();
-            $ports[] = $protocol->publishedPort();
+        foreach (self::entries($server) as $entry) {
+            $command[] = "--entrypoints.{$entry['entrypoint']}.address=:{$entry['port']}";
+            $ports[] = "{$entry['port']}:{$entry['port']}";
         }
 
         $networks = self::networks($server);
@@ -122,15 +148,27 @@ class DatabaseProxyConfiguration
             $name = 'db-'.$database->uuid;
             $passthrough = ! self::usesPublicCertificate($database);
             $port = $passthrough && $database->enable_ssl ? $protocol->tlsPort : $protocol->port;
+            $dedicatedPort = $database->proxyPort();
 
-            $routers[$name] = [
-                'entryPoints' => [$protocol->entrypoint()],
-                'rule' => "HostSNI(`{$database->domain}`)",
+            $router = [
+                'entryPoints' => [$dedicatedPort ? "db-{$protocol->name}-{$dedicatedPort}" : $protocol->entrypoint()],
                 'service' => $name,
-                'tls' => $passthrough
-                    ? ['passthrough' => true]
-                    : ['certResolver' => self::CERTIFICATE_RESOLVER],
             ];
+            if (! $dedicatedPort) {
+                // The shared port of a protocol picks the database by the hostname of the TLS
+                // handshake. A database with a port of its own is the only database on it.
+                $router['rule'] = "HostSNI(`{$database->domain}`)";
+            }
+            if ($passthrough) {
+                $router['tls'] = ['passthrough' => true];
+            } else {
+                $router['tls'] = ['certResolver' => self::CERTIFICATE_RESOLVER];
+                if ($dedicatedPort) {
+                    // Without a rule the proxy does not know the domain of the certificate.
+                    $router['tls']['domains'] = [['main' => $database->domain]];
+                }
+            }
+            $routers[$name] = $router;
             $services[$name] = [
                 'loadBalancer' => [
                     'servers' => [

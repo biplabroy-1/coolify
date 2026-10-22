@@ -31,6 +31,7 @@ class StandaloneKeydb extends BaseModel
         'is_public',
         'public_port',
         'domain',
+        'proxy_port',
         'ports_mappings',
         'limits_memory',
         'limits_memory_swap',
