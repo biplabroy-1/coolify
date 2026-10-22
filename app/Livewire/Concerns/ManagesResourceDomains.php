@@ -97,7 +97,8 @@ trait ManagesResourceDomains
     protected function effectiveDomainInternalPort(string $url, ?string $service = null): array
     {
         $canonical = DomainPortOverrides::withoutPort($url);
-        $overrides = $this->application->domain_port_overrides ?? [];
+        // A database is reached on the port the database proxy publishes for it, it has no port overrides.
+        $overrides = $this->isApplication() ? ($this->application->domain_port_overrides ?? []) : [];
         $legacyPortPart = DomainUrlParts::split($url)['port'] ?? '';
         $legacyPort = $legacyPortPart !== '' ? (int) $legacyPortPart : null;
         $hasMapEntry = array_key_exists($canonical, $overrides);
@@ -159,7 +160,7 @@ trait ManagesResourceDomains
     public function addSuggestedDomain(int $index): void
     {
         try {
-            $this->authorize('update', $this->application);
+            $this->authorize('update', $this->resource());
 
             if ($this->labelsAreWritable) {
                 $this->dispatch('error', 'Domains cannot be edited while container labels are writable.');
@@ -289,7 +290,7 @@ trait ManagesResourceDomains
     protected function currentRowPort(string $url): ?int
     {
         $canonical = DomainPortOverrides::withoutPort($url);
-        $override = ($this->application->domain_port_overrides ?? [])[$canonical] ?? null;
+        $override = $this->isApplication() ? (($this->application->domain_port_overrides ?? [])[$canonical] ?? null) : null;
         if (filled($override) && (int) $override > 0) {
             return (int) $override;
         }

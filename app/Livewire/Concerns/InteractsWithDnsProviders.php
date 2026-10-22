@@ -356,9 +356,13 @@ trait InteractsWithDnsProviders
         $this->authorize('update', $this->dnsResource());
     }
 
-    /** The application or service whose domains this component manages. */
+    /** The application, service or database whose domains this component manages. */
     protected function dnsResource(): Model
     {
+        if (method_exists($this, 'resource')) {
+            return $this->resource();
+        }
+
         return property_exists($this, 'application') ? $this->application : $this->service;
     }
 

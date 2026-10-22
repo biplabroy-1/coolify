@@ -272,6 +272,27 @@ test('the domains page adds a domain to the database', function () {
     expect($database->refresh()->domain)->toBeNull();
 });
 
+test('the domains page of a database opens the dns records of the database', function () {
+    $user = User::factory()->create();
+    $this->team->members()->attach($user->id, ['role' => 'owner']);
+    session(['currentTeam' => $this->team]);
+    $this->actingAs($user);
+
+    $database = create_standalone_postgresql($this->environment->id, $this->destination, [
+        'is_public' => true,
+        'enable_ssl' => true,
+        'status' => 'running:healthy',
+        'postgres_user' => 'postgres',
+        'postgres_db' => 'postgres',
+        'is_log_drain_enabled' => false,
+        'domain' => 'db.example.com',
+    ]);
+
+    Livewire::test(DatabaseDomains::class, ['database' => $database])
+        ->call('openManualDnsRecords')
+        ->assertHasNoErrors();
+});
+
 test('the general component saves the domain', function () {
     $user = User::factory()->create();
     $this->team->members()->attach($user->id, ['role' => 'owner']);
