@@ -282,7 +282,9 @@ class GetContainersStatus implements ShouldBeUnique
                                 ]);
                             }
 
-                            if ($isPublic) {
+                            if ($isPublic && $database->hasProxyDomain()) {
+                                // The database is reached through the database proxy, it has no TCP proxy container.
+                            } elseif ($isPublic) {
                                 $foundTcpProxy = $this->containers->filter(function ($value, $key) use ($uuid) {
                                     if ($this->server->isSwarm()) {
                                         return data_get($value, 'Spec.Name') === "coolify-proxy_$uuid";

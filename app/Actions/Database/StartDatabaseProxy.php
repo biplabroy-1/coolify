@@ -28,6 +28,11 @@ class StartDatabaseProxy
 
     public function handle(StandaloneRedis|StandalonePostgresql|StandaloneMongodb|StandaloneMysql|StandaloneMariadb|StandaloneKeydb|StandaloneDragonfly|StandaloneClickhouse|ServiceDatabase $database)
     {
+        if ($database->hasProxyDomain()) {
+            // The database is reached through the database proxy, it needs no TCP proxy container.
+            return;
+        }
+
         $databaseType = $database->database_type;
         $network = data_get($database, 'destination.network');
         $server = data_get($database, 'destination.server');

@@ -17,12 +17,14 @@ trait HasDatabaseProxyDomain
     {
         static::saved(function (self $database): void {
             $hadDomain = (bool) $database->getOriginal('is_public') && filled($database->getOriginal('domain'));
-            if ($hadDomain !== $database->hasProxyDomain()) {
+            $hasDomain = $database->hasProxyDomain();
+            // The proxy routes by the hostname, so a new domain needs new routing and a new certificate.
+            $domainChanged = $database->getOriginal('domain') !== $database->domain;
+            if ($hadDomain !== $hasDomain || ($hasDomain && $domainChanged)) {
                 ApplyDatabaseDomain::dispatch($database);
             }
         });
     }
-
 
     public function isForceHttpsEnabled(): bool
     {

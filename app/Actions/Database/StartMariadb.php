@@ -71,7 +71,7 @@ class StartMariadb
                 // The certificate files are only written when they are missing on the server, so
                 // the old ones have to go or the database keeps a key that does not match the
                 // new certificate.
-                $this->commands[] = "rm -f {$this->configuration_dir}/ssl/server.crt {$this->configuration_dir}/ssl/server.key";
+                instant_remote_process(["rm -rf {$this->configuration_dir}/ssl/server.crt {$this->configuration_dir}/ssl/server.key"], $this->database->destination->server);
                 $this->commands[] = "echo 'No SSL certificate found, generating new SSL certificate for this database.'";
                 $this->ssl_certificate = SslHelper::generateSslCertificate(
                     commonName: $this->database->uuid,
