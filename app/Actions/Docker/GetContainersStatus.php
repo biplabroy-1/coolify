@@ -284,6 +284,17 @@ class GetContainersStatus implements ShouldBeUnique
 
                             if ($isPublic && $database->hasProxyDomain()) {
                                 // The database is reached through the database proxy, it has no TCP proxy container.
+                                // Remove an orphaned TCP proxy container left from an earlier (port-based) exposure.
+                                $orphanedProxy = $this->containers->filter(function ($value, $key) use ($uuid) {
+                                    if ($this->server->isSwarm()) {
+                                        return data_get($value, 'Spec.Name') === "coolify-proxy_$uuid";
+                                    } else {
+                                        return data_get($value, 'Name') === "/$uuid-proxy";
+                                    }
+                                })->first();
+                                if ($orphanedProxy) {
+                                    StopDatabaseProxy::run($database);
+                                }
                             } elseif ($isPublic) {
                                 $foundTcpProxy = $this->containers->filter(function ($value, $key) use ($uuid) {
                                     if ($this->server->isSwarm()) {
