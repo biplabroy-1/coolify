@@ -1,7 +1,7 @@
 <?php
 
 use App\Actions\Database\ApplyDatabaseDomain;
-use App\Livewire\Project\Database\Domains as DatabaseDomains;
+use App\Livewire\Project\Database\DatabaseDomains;
 use App\Livewire\Project\Database\Postgresql\General as PostgresqlGeneral;
 use App\Models\DnsProviderZone;
 use App\Models\Environment;
@@ -258,7 +258,7 @@ test('the domains page adds a domain to the database', function () {
     ]);
 
     Livewire::test(DatabaseDomains::class, ['database' => $database])
-        ->set('newDomain', 'db.example.com')
+        ->set('newDomainParts.host', 'db.example.com')
         ->call('addDomain')
         ->assertHasNoErrors();
 
@@ -266,7 +266,7 @@ test('the domains page adds a domain to the database', function () {
         ->and((bool) $database->is_public)->toBeTrue();
 
     Livewire::test(DatabaseDomains::class, ['database' => $database])
-        ->call('removeDomain', 'db.example.com')
+        ->call('removeDomain', 0)
         ->assertHasNoErrors();
 
     expect($database->refresh()->domain)->toBeNull();

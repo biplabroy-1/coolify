@@ -20,7 +20,7 @@
     $rowDirection = $isCompose
         ? ($serviceRedirects[$this->serviceRedirectWireKey($row['service'])] ?? 'both')
         : $redirect;
-    $isNoindexed = $application->isDomainNoindexed($row['url']);
+    $isNoindexed = $this->resource()->isDomainNoindexed($row['url']);
     $domainKey = hash('sha256', $row['url'].'|'.($row['service'] ?? ''));
     $editingParts = \App\Support\DomainUrlParts::split($row['url']);
     if ($row['has_port_override'] ?? false) {
@@ -130,7 +130,7 @@
         </div>
 
         <div class="service-domain-actions flex items-center justify-end gap-1">
-            @can('update', $application)
+            @can('update', $this->resource())
                 <button type="button" wire:click="checkDomainDns({{ $index }})"
                     wire:loading.attr="disabled"
                     wire:target="checkDomainDns({{ $index }}),checkAllDns"
@@ -156,7 +156,7 @@
                             <x-reicon name="settings" class="size-3.5" />
                         </button>
                         <x-modal-confirmation class="!w-auto shrink-0" title="Remove domain?" buttonTitle="Remove"
-                            isErrorButton canGate="update" :canResource="$application"
+                            isErrorButton canGate="update" :canResource="$this->resource()"
                             submitAction="removeDomainByKey({{ $domainKey }})" :actions="[
                                 'This domain will be removed from the application.',
                                 'Redeploy or restart may be required for proxy changes.',
