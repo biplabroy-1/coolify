@@ -16,7 +16,9 @@
     };
     $gridClass = 'service-domains-overview-grid'.($isApplication ? '' : ' service-domains-overview-grid--plain');
     $publicUrl = getFqdnWithoutPort($row['url']);
-    $faviconUrl = $isSuggested ? null : \App\Support\DomainFavicon::url($publicUrl, $row['dns_status'] ?? null, $row['expected_ip'] ?? null);
+    // A database is reached with a database client, so only the host is shown.
+    $displayUrl = $isApplication ? $publicUrl : (parse_url($row['url'], PHP_URL_HOST) ?: $publicUrl);
+    $faviconUrl = $isSuggested || ! $isApplication ? null : \App\Support\DomainFavicon::url($publicUrl, $row['dns_status'] ?? null, $row['expected_ip'] ?? null);
     $rowDirection = $isCompose
         ? ($serviceRedirects[$this->serviceRedirectWireKey($row['service'])] ?? 'both')
         : $redirect;
@@ -44,23 +46,30 @@
                         {{ $row['url'] }}
                     </span>
                 @else
-                    @if ($faviconUrl)
-                        <span class="relative size-4 shrink-0" aria-hidden="true">
-                            <x-reicon name="globe"
-                                class="domain-favicon-fallback size-4 text-neutral-400 dark:text-fg-faint" />
-                            <img src="{{ $faviconUrl }}" alt="" loading="lazy" decoding="async"
-                                referrerpolicy="no-referrer"
-                                x-init="if ($el.complete && $el.naturalWidth > 0) { $el.previousElementSibling.classList.add('hidden'); $el.classList.remove('invisible') }"
-                                x-on:load="$el.previousElementSibling.classList.add('hidden'); $el.classList.remove('invisible')"
-                                x-on:error="$el.remove()"
-                                class="invisible absolute inset-0 size-4 rounded-sm" />
+                    @if ($isApplication)
+                        @if ($faviconUrl)
+                            <span class="relative size-4 shrink-0" aria-hidden="true">
+                                <x-reicon name="globe"
+                                    class="domain-favicon-fallback size-4 text-neutral-400 dark:text-fg-faint" />
+                                <img src="{{ $faviconUrl }}" alt="" loading="lazy" decoding="async"
+                                    referrerpolicy="no-referrer"
+                                    x-init="if ($el.complete && $el.naturalWidth > 0) { $el.previousElementSibling.classList.add('hidden'); $el.classList.remove('invisible') }"
+                                    x-on:load="$el.previousElementSibling.classList.add('hidden'); $el.classList.remove('invisible')"
+                                    x-on:error="$el.remove()"
+                                    class="invisible absolute inset-0 size-4 rounded-sm" />
+                            </span>
+                        @endif
+                        <a href="{{ $publicUrl }}" target="_blank" rel="noopener noreferrer"
+                            class="min-w-0 flex-1 truncate text-[13px] text-black underline decoration-neutral-300 underline-offset-2 hover:decoration-coollabs dark:text-fg dark:decoration-white/20 hover:decoration-warning"
+                            title="{{ $publicUrl }}">
+                            {{ $publicUrl }}
+                        </a>
+                    @else
+                        <span class="min-w-0 flex-1 truncate text-[13px] text-black dark:text-white"
+                            title="{{ $displayUrl }}">
+                            {{ $displayUrl }}
                         </span>
                     @endif
-                    <a href="{{ $publicUrl }}" target="_blank" rel="noopener noreferrer"
-                        class="min-w-0 flex-1 truncate text-[13px] text-black underline decoration-neutral-300 underline-offset-2 hover:decoration-coollabs dark:text-fg dark:decoration-white/20 dark:hover:decoration-warning"
-                        title="{{ $publicUrl }}">
-                        {{ $publicUrl }}
-                    </a>
                 @endif
                 @if ($isSuggested && ! empty($row['suggestion_label']))
                     <span class="table-badge table-badge-warning shrink-0">{{ $row['suggestion_label'] }}</span>
@@ -160,7 +169,7 @@
                         <button type="button"
                             @click="openEditDomain(@js($index), @js($row['url']), @js($editingParts), @js($row['service']), @js($isNoindexed ? 'noindex' : 'index'), @js($rowDirection))"
                             class="icon-button shrink-0"
-                            title="Domain settings" aria-label="Settings for {{ $publicUrl }}">
+                            title="Domain settings" aria-label="Settings for {{ $displayUrl }}">
                             <x-reicon name="settings" class="size-3.5" />
                         </button>
                         <x-modal-confirmation class="!w-auto shrink-0" title="Remove domain?" buttonTitle="Remove"
