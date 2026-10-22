@@ -35,6 +35,11 @@ class StartDbProxy
         $compose = Yaml::dump(DatabaseProxyConfiguration::compose($server), 10, 2);
         $routing = Yaml::dump(DatabaseProxyConfiguration::routing($server), 10, 2);
 
+        // Only recreate the container when the compose file changed (new entrypoint/port).
+        // Routing changes are picked up by Traefik's file provider without a restart.
+        $existingCompose = instant_remote_process(["cat {$path}/docker-compose.yml 2>/dev/null || true"], $server);
+        $composeChanged = trim((string) $existingCompose) !== trim($compose);
+
         $server->proxy->set('db_status', 'starting');
         $server->save();
 
@@ -49,11 +54,13 @@ class StartDbProxy
             $commands[] = dockerNetworkEnsureCommand($network, overlay: $server->isSwarm(), quietCreate: true);
         }
 
-        $commands[] = 'docker rm -f '.DatabaseProxyConfiguration::CONTAINER_NAME.' 2>/dev/null || true';
-        if ($server->isSwarmManager()) {
-            $commands[] = "docker stack deploy --detach=true -c {$path}/docker-compose.yml coolify-db-proxy";
-        } else {
-            $commands[] = "docker compose -f {$path}/docker-compose.yml up -d";
+        if ($composeChanged) {
+            $commands[] = 'docker rm -f '.DatabaseProxyConfiguration::CONTAINER_NAME.' 2>/dev/null || true';
+            if ($server->isSwarmManager()) {
+                $commands[] = "docker stack deploy --detach=true -c {$path}/docker-compose.yml coolify-db-proxy";
+            } else {
+                $commands[] = "docker compose -f {$path}/docker-compose.yml up -d";
+            }
         }
 
         // The proxy reaches the database containers through the networks they share.
