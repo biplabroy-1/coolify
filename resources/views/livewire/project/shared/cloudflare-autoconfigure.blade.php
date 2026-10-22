@@ -1,7 +1,7 @@
 {{-- DNS entries: Domain Connect (Cloud only + key) and/or generic Type/Name/Value records. --}}
 @php
     $domainConnectAvailable = $this->domainConnectAvailable();
-    $dnsAuthResource = property_exists($this, 'application') ? $this->application : $this->service;
+    $dnsAuthResource = property_exists($this, 'application') ? $this->application : (property_exists($this, 'service') ? $this->service : $this->database);
 @endphp
 
 <div x-data="{ dnsEntriesOpen: false }" class="relative" @click.outside="dnsEntriesOpen = false">

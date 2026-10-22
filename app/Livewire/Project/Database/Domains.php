@@ -3,15 +3,33 @@
 namespace App\Livewire\Project\Database;
 
 use App\Actions\Shared\CheckDomainDns;
+use App\Livewire\Concerns\InteractsWithCloudflareDomainConnect;
+use App\Livewire\Concerns\InteractsWithDnsProviders;
 use App\Rules\ValidHostname;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Livewire\Attributes\Locked;
 use Livewire\Component;
 
 class Domains extends Component
 {
     use AuthorizesRequests;
+    use InteractsWithCloudflareDomainConnect;
+    use InteractsWithDnsProviders;
 
     public $database;
+
+    /** The address of the server of the database, the target of the DNS records. */
+    #[Locked]
+    public ?string $serverIp = null;
+
+    /**
+     * The domains of the database with their DNS status.
+     *
+     * @var array<int, array{url: string, dns_status: string, dns_message: string, expected_ip: ?string}>
+     */
+    #[Locked]
+    public array $domainRows = [];
 
     public string $newDomain = '';
 
@@ -22,21 +40,20 @@ class Domains extends Component
      */
     public array $dnsStatuses = [];
 
+    public function mount(): void
+    {
+        $this->authorize('view', $this->database);
+        $this->serverIp = $this->database->proxyServer()?->getIp;
+        $this->loadDomainRows();
+        $this->refreshDnsStatuses();
+    }
+
     /**
      * The domains of the database, the first one is the primary domain.
      */
     public function domains(): array
     {
-        return array_values(array_filter(array_map(
-            fn (string $domain): string => strtolower(trim($domain)),
-            explode(',', (string) $this->database->domain)
-        )));
-    }
-
-    public function mount(): void
-    {
-        $this->authorize('view', $this->database);
-        $this->refreshDnsStatuses();
+        return $this->database->proxyDomains();
     }
 
     /**
@@ -63,6 +80,7 @@ class Domains extends Component
         $this->database->save();
 
         $this->newDomain = '';
+        $this->loadDomainRows();
         $this->refreshDnsStatuses();
         $this->dispatch('success', 'The domain was added.');
     }
@@ -79,6 +97,7 @@ class Domains extends Component
         $this->database->domain = $domains === [] ? null : implode(',', $domains);
         $this->database->save();
 
+        $this->loadDomainRows();
         $this->refreshDnsStatuses();
         $this->dispatch('success', 'The domain was removed.');
     }
@@ -92,6 +111,45 @@ class Domains extends Component
 
         $this->refreshDnsStatuses();
         $this->dispatch('success', 'The DNS records were checked.');
+    }
+
+    protected function authorizeUpdateForDomainConnect(): void
+    {
+        $this->authorize('update', $this->database);
+    }
+
+    /**
+     * The DNS status of a database is checked when its domains page opens, so there is nothing
+     * to persist.
+     */
+    protected function persistDomainDnsStatuses(array $startingCheckKeys = []): void
+    {
+        //
+    }
+
+    protected function dnsResource(): Model
+    {
+        return $this->database;
+    }
+
+    protected function dnsResourceForHostname(string $hostname): ?Model
+    {
+        return $this->database;
+    }
+
+    protected function usesInstanceNetworkAddressesForDnsHints(): bool
+    {
+        return $this->database->proxyServer()?->id === 0;
+    }
+
+    private function loadDomainRows(): void
+    {
+        $this->domainRows = collect($this->domains())->map(fn (string $domain): array => [
+            'url' => $domain,
+            'dns_status' => 'pending',
+            'dns_message' => '',
+            'expected_ip' => null,
+        ])->all();
     }
 
     private function refreshDnsStatuses(): void
@@ -110,6 +168,16 @@ class Domains extends Component
         }
 
         $this->dnsStatuses = CheckDomainDns::run($entries, $server, $server?->getIp);
+
+        foreach ($this->domainRows as $index => $row) {
+            $status = $this->dnsStatuses[$row['url']] ?? null;
+            if ($status === null) {
+                continue;
+            }
+            $this->domainRows[$index]['dns_status'] = $status['status'];
+            $this->domainRows[$index]['dns_message'] = $status['message'];
+            $this->domainRows[$index]['expected_ip'] = $status['expected_ip'];
+        }
     }
 
     public function render()

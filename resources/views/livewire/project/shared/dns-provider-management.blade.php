@@ -1,6 +1,6 @@
 <div class="contents">
     @php
-        $dnsAuthResource = property_exists($this, 'application') ? $this->application : $this->service;
+        $dnsAuthResource = property_exists($this, 'application') ? $this->application : (property_exists($this, 'service') ? $this->service : $this->database);
     @endphp
     @if ($showDnsProviderModal)
     <div x-data="{ modalOpen: @entangle('showDnsProviderModal') }" class="relative h-auto w-auto"

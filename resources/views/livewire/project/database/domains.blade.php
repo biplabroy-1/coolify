@@ -40,6 +40,10 @@
                     </x-forms.button>
                 @endif
 
+                <div class="relative shrink-0">
+                    @include('livewire.project.shared.cloudflare-autoconfigure')
+                </div>
+
                 <x-modal-input title="Add domain" :closeOutside="false" :wireIgnore="false"
                     canGate="update" :canResource="$database">
                     <x-slot:content>
@@ -86,6 +90,7 @@
                         @php
                             $status = $dnsStatuses[$domain]['status'] ?? 'pending';
                             $message = $dnsStatuses[$domain]['message'] ?? '';
+                            $domainRow = collect($domainRows)->firstWhere('url', $domain) ?? [];
                             $dnsType = match ($status) {
                                 'ok' => 'success',
                                 'failed' => 'error',
