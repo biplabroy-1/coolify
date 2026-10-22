@@ -4,6 +4,7 @@ namespace App\Livewire\Project\Database\Mongodb;
 
 use App\Actions\Database\StartDatabaseProxy;
 use App\Actions\Database\StopDatabaseProxy;
+use App\Livewire\Concerns\HasDatabaseDomain;
 use App\Models\Server;
 use App\Models\StandaloneMongodb;
 use App\Support\ValidationPatterns;
@@ -13,7 +14,7 @@ use Livewire\Component;
 
 class General extends Component
 {
-    use AuthorizesRequests;
+    use AuthorizesRequests, HasDatabaseDomain;
 
     public ?Server $server = null;
 
@@ -66,6 +67,7 @@ class General extends Component
             'portsMappings' => ValidationPatterns::portMappingRules(),
             'isPublic' => 'nullable|boolean',
             'publicPort' => 'nullable|integer|min:1|max:65535',
+            'domain' => $this->databaseDomainRules(),
             'publicPortTimeout' => 'nullable|integer|min:1',
             'isLogDrainEnabled' => 'nullable|boolean',
             'customDockerRunOptions' => 'nullable',
@@ -103,6 +105,7 @@ class General extends Component
         'portsMappings' => 'Port Mapping',
         'isPublic' => 'Is Public',
         'publicPort' => 'Public Port',
+        'domain' => 'Domain',
         'publicPortTimeout' => 'Public Port Timeout',
         'customDockerRunOptions' => 'Custom Docker Run Options',
     ];
@@ -139,6 +142,7 @@ class General extends Component
             $this->database->ports_mappings = $this->portsMappings;
             $this->database->is_public = $this->isPublic;
             $this->database->public_port = $this->publicPort ?: null;
+            $this->syncDatabaseDomain(true);
             $this->database->public_port_timeout = $this->publicPortTimeout ?: null;
             $this->database->is_log_drain_enabled = $this->isLogDrainEnabled;
             $this->database->custom_docker_run_options = $this->customDockerRunOptions;
@@ -155,6 +159,7 @@ class General extends Component
             $this->portsMappings = $this->database->ports_mappings;
             $this->isPublic = $this->database->is_public;
             $this->publicPort = $this->database->public_port;
+            $this->syncDatabaseDomain();
             $this->publicPortTimeout = $this->database->public_port_timeout;
             $this->isLogDrainEnabled = $this->database->is_log_drain_enabled;
             $this->customDockerRunOptions = $this->database->custom_docker_run_options;
@@ -213,7 +218,7 @@ class General extends Component
         try {
             $this->authorize('update', $this->database);
 
-            if ($this->isPublic && ! $this->publicPort) {
+            if ($this->isPublic && ! $this->publicPort && $this->databaseNeedsPublicPort()) {
                 $this->dispatch('error', 'Public port is required.');
                 $this->isPublic = false;
 
@@ -226,12 +231,14 @@ class General extends Component
                 return;
             }
             $this->syncData(true);
-            if ($this->isPublic) {
-                StartDatabaseProxy::run($this->database);
-                $this->dispatch('success', 'Database is now publicly accessible.');
-            } else {
+            if (! $this->isPublic) {
                 StopDatabaseProxy::run($this->database);
                 $this->dispatch('success', 'Database is no longer publicly accessible.');
+            } elseif ($this->database->hasProxyDomain()) {
+                $this->dispatch('success', 'Database is now publicly accessible through the proxy.');
+            } else {
+                StartDatabaseProxy::run($this->database);
+                $this->dispatch('success', 'Database is now publicly accessible.');
             }
             $this->dispatch('databaseUpdated');
         } catch (\Throwable $e) {

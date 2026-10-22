@@ -129,6 +129,8 @@ beforeEach(function () {
             'destination_id' => $this->destination->id,
             'destination_type' => $this->destination->getMorphClass(),
             'status' => 'running:healthy',
+            'is_public' => true,
+            'domain' => 'db.example.com',
         ]);
         $database->uuid = new_public_id();
         $database->save();
@@ -715,6 +717,7 @@ test('service nested apps dbs volumes backups and db file storages round-trip', 
         'public_port' => 15432,
         'public_port_timeout' => 30,
         'is_public' => true,
+        'domain' => 'service-db.example.com',
         'custom_type' => 'postgresql',
         'status' => 'running:healthy',
     ]);
@@ -872,6 +875,7 @@ test('service nested apps dbs volumes backups and db file storages round-trip', 
     $importedSvcDb = ServiceDatabase::where('uuid', 'svc-db-postgres')->first();
     expect($importedSvcDb)->not->toBeNull()
         ->and($importedSvcDb->public_port)->toBe(15432)
+        ->and($importedSvcDb->domain)->toBe('service-db.example.com')
         ->and($importedSvcDb->custom_type)->toBe('postgresql')
         ->and($importedSvcDb->persistentStorages)->toHaveCount(1)
         ->and($importedSvcDb->fileStorages)->toHaveCount(1)
@@ -881,7 +885,9 @@ test('service nested apps dbs volumes backups and db file storages round-trip', 
     $importedStandaloneDb = StandalonePostgresql::where('uuid', $originalDbUuid)->first();
     expect($importedStandaloneDb)->not->toBeNull()
         ->and($importedStandaloneDb->fileStorages)->toHaveCount(1)
-        ->and($importedStandaloneDb->fileStorages->first()->uuid)->toBe('standalone-db-file-1');
+        ->and($importedStandaloneDb->fileStorages->first()->uuid)->toBe('standalone-db-file-1')
+        ->and($importedStandaloneDb->domain)->toBe('db.example.com')
+        ->and((bool) $importedStandaloneDb->is_public)->toBeTrue();
 
     $importedApp = Application::where('uuid', $originalAppUuid)->first();
     expect($importedApp)->not->toBeNull()

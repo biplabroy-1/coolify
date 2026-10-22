@@ -1280,6 +1280,15 @@ $siteAddress {
         return $proxy_path;
     }
 
+    /**
+     * The directory of the database proxy. It is independent of the proxy of the server, because
+     * the database proxy serves the databases and not the applications.
+     */
+    public function databaseProxyPath()
+    {
+        return config('constants.coolify.base_config_path').'/proxy-db';
+    }
+
     public function proxyType()
     {
         return data_get($this->proxy, 'type');

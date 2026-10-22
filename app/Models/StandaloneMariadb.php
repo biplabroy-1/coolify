@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use App\Traits\ClearsGlobalSearchCache;
 use App\Traits\HasDatabaseHealthCheck;
+use App\Traits\HasDatabaseProxyDomain;
 use App\Traits\HasLogRedactionSetting;
 use App\Traits\HasMetrics;
 use App\Traits\HasSafeStringAttribute;
@@ -16,7 +17,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class StandaloneMariadb extends BaseModel
 {
-    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
+    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasDatabaseProxyDomain, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
 
     protected $fillable = [
         'uuid',
@@ -31,6 +32,7 @@ class StandaloneMariadb extends BaseModel
         'image',
         'is_public',
         'public_port',
+        'domain',
         'ports_mappings',
         'limits_memory',
         'limits_memory_swap',
@@ -319,16 +321,21 @@ class StandaloneMariadb extends BaseModel
     {
         return new Attribute(
             get: function () {
-                if ($this->is_public && $this->public_port) {
-                    $serverIp = $this->destination->server->getIp;
-                    if (empty($serverIp)) {
+                if ($this->isPubliclyAccessible()) {
+                    $serverHost = $this->publicEndpointHost();
+                    $port = $this->publicEndpointPort();
+                    if ($serverHost === null || $port === null) {
                         return null;
                     }
-                    $serverHost = formatHostForUrl($serverIp);
                     $encodedUser = rawurlencode($this->mariadb_user);
                     $encodedPass = rawurlencode($this->mariadb_password);
+                    $url = "mysql://{$encodedUser}:{$encodedPass}@{$serverHost}:{$port}/{$this->mariadb_database}";
+                    if ($this->hasProxyDomain()) {
+                        // The proxy terminates TLS, so the client always uses it.
+                        $url .= '?ssl-mode=REQUIRED';
+                    }
 
-                    return "mysql://{$encodedUser}:{$encodedPass}@{$serverHost}:{$this->public_port}/{$this->mariadb_database}";
+                    return $url;
                 }
 
                 return null;

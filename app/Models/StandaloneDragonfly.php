@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use App\Traits\ClearsGlobalSearchCache;
 use App\Traits\HasDatabaseHealthCheck;
+use App\Traits\HasDatabaseProxyDomain;
 use App\Traits\HasLogRedactionSetting;
 use App\Traits\HasMetrics;
 use App\Traits\HasSafeStringAttribute;
@@ -15,7 +16,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class StandaloneDragonfly extends BaseModel
 {
-    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
+    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasDatabaseProxyDomain, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
 
     protected $fillable = [
         'uuid',
@@ -28,6 +29,7 @@ class StandaloneDragonfly extends BaseModel
         'image',
         'is_public',
         'public_port',
+        'domain',
         'ports_mappings',
         'limits_memory',
         'limits_memory_swap',
@@ -330,17 +332,17 @@ class StandaloneDragonfly extends BaseModel
     {
         return new Attribute(
             get: function () {
-                if ($this->is_public && $this->public_port) {
-                    $serverIp = $this->destination->server->getIp;
-                    if (empty($serverIp)) {
+                if ($this->isPubliclyAccessible()) {
+                    $serverHost = $this->publicEndpointHost();
+                    $port = $this->publicEndpointPort();
+                    if ($serverHost === null || $port === null) {
                         return null;
                     }
-                    $serverHost = formatHostForUrl($serverIp);
-                    $scheme = $this->enable_ssl ? 'rediss' : 'redis';
+                    $scheme = $this->hasProxyDomain() || $this->enable_ssl ? 'rediss' : 'redis';
                     $encodedPass = rawurlencode($this->connectionPassword());
-                    $url = "{$scheme}://:{$encodedPass}@{$serverHost}:{$this->public_port}/0";
+                    $url = "{$scheme}://:{$encodedPass}@{$serverHost}:{$port}/0";
 
-                    if ($this->enable_ssl && $this->ssl_mode === 'verify-ca') {
+                    if ($this->enable_ssl && ! $this->hasProxyDomain() && $this->ssl_mode === 'verify-ca') {
                         $url .= '?cacert=/etc/ssl/certs/coolify-ca.crt';
                     }
 

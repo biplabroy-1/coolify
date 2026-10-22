@@ -215,6 +215,11 @@
                                                 placeholder="5432" disabled="{{ $isPublic }}" id="publicPort"
                                                 label="Public Port" />
                                         </div>
+                                        <div class="w-full sm:max-w-xs">
+                                            <x-forms.input canGate="update" :canResource="$serviceDatabase"
+                                                placeholder="db.example.com" id="domain" label="Domain"
+                                                helper="Expose this database through the database proxy of the server. The proxy picks the database by this hostname, so point the domain at the server." />
+                                        </div>
                                         <div class="flex shrink-0 flex-wrap items-center gap-2">
                                             @if ($isPublic)
                                                 <x-status-badge status="Public" type="success" />

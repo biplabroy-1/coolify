@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use App\Traits\ClearsGlobalSearchCache;
 use App\Traits\HasDatabaseHealthCheck;
+use App\Traits\HasDatabaseProxyDomain;
 use App\Traits\HasLogRedactionSetting;
 use App\Traits\HasMetrics;
 use App\Traits\HasSafeStringAttribute;
@@ -16,7 +17,7 @@ use Throwable;
 
 class StandaloneClickhouse extends BaseModel
 {
-    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
+    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasDatabaseProxyDomain, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
 
     protected array $auditExclude = ['last_online_at'];
 
@@ -34,6 +35,7 @@ class StandaloneClickhouse extends BaseModel
         'image',
         'is_public',
         'public_port',
+        'domain',
         'ports_mappings',
         'limits_memory',
         'limits_memory_swap',
@@ -376,17 +378,22 @@ class StandaloneClickhouse extends BaseModel
     {
         return new Attribute(
             get: function () {
-                if ($this->is_public && $this->public_port) {
-                    $serverIp = $this->destination->server->getIp;
-                    if (empty($serverIp)) {
+                if ($this->isPubliclyAccessible()) {
+                    $serverHost = $this->publicEndpointHost();
+                    $port = $this->publicEndpointPort();
+                    if ($serverHost === null || $port === null) {
                         return null;
                     }
-                    $serverHost = formatHostForUrl($serverIp);
                     $encodedUser = rawurlencode($this->clickhouse_admin_user);
                     $encodedPass = rawurlencode($this->clickhouse_admin_password);
                     $database = $this->clickhouse_db ?? 'default';
+                    $url = "clickhouse://{$encodedUser}:{$encodedPass}@{$serverHost}:{$port}/{$database}";
+                    if ($this->hasProxyDomain()) {
+                        // The proxy terminates TLS, so the client always uses it.
+                        $url .= '?tls=true';
+                    }
 
-                    return "clickhouse://{$encodedUser}:{$encodedPass}@{$serverHost}:{$this->public_port}/{$database}";
+                    return $url;
                 }
 
                 return null;

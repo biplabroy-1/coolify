@@ -12,11 +12,14 @@ use App\Models\ServerSetting;
 use App\Models\Service;
 use App\Models\ServiceApplication;
 use App\Models\ServiceDatabase;
+use App\Rules\ValidHostname;
 use App\Services\Dns\ManagedDnsRecordCleanup;
 use App\Support\ValidationPatterns;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 
 class Index extends Component
@@ -64,6 +67,8 @@ class Index extends Component
 
     public bool $isPublic = false;
 
+    public ?string $domain = null;
+
     public bool $isLogDrainEnabled = false;
 
     // Application-specific properties
@@ -108,6 +113,7 @@ class Index extends Component
         'publicPort' => 'nullable|integer|min:1|max:65535',
         'publicPortTimeout' => 'nullable|integer|min:1',
         'isPublic' => 'required|boolean',
+        'domain' => 'nullable|string|max:253',
         'isLogDrainEnabled' => 'required|boolean',
         'maxRestartCount' => 'integer|min:0',
         // Application-specific rules
@@ -241,6 +247,14 @@ class Index extends Component
             $this->serviceDatabase->public_port = $this->publicPort ?: null;
             $this->serviceDatabase->public_port_timeout = $this->publicPortTimeout ?: null;
             $this->serviceDatabase->is_public = $this->isPublic;
+            $domain = filled($this->domain) ? strtolower(trim($this->domain)) : null;
+            if ($domain !== null) {
+                $validator = Validator::make(['domain' => $domain], ['domain' => [new ValidHostname]]);
+                if ($validator->fails()) {
+                    throw ValidationException::withMessages(['domain' => 'The Domain must be a valid hostname.']);
+                }
+            }
+            $this->serviceDatabase->domain = $domain;
             $this->serviceDatabase->is_log_drain_enabled = $this->isLogDrainEnabled;
         } else {
             $this->humanName = $this->serviceDatabase->human_name;
@@ -248,6 +262,7 @@ class Index extends Component
             $this->image = $this->serviceDatabase->image;
             $this->excludeFromStatus = $this->serviceDatabase->exclude_from_status ?? false;
             $this->publicPort = $this->serviceDatabase->public_port;
+            $this->domain = $this->serviceDatabase->domain;
             $this->publicPortTimeout = $this->serviceDatabase->public_port_timeout;
             $this->isPublic = $this->serviceDatabase->is_public ?? false;
             $this->isLogDrainEnabled = $this->serviceDatabase->is_log_drain_enabled ?? false;

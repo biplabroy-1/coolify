@@ -68,10 +68,12 @@ class StartMysql
 
             $this->ssl_certificate = $this->database->sslCertificates()->first();
 
-            if (! $this->ssl_certificate) {
+            if (! $this->ssl_certificate || ($this->database->domain && ! in_array($this->database->domain, $this->ssl_certificate->subject_alternative_names ?? []))) {
+                $this->database->sslCertificates()->delete();
                 $this->commands[] = "echo 'No SSL certificate found, generating new SSL certificate for this database.'";
                 $this->ssl_certificate = SslHelper::generateSslCertificate(
                     commonName: $this->database->uuid,
+                    subjectAlternativeNames: array_filter([$this->database->domain]),
                     resourceType: $this->database->getMorphClass(),
                     resourceId: $this->database->id,
                     serverId: $server->id,

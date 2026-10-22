@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use App\Traits\ClearsGlobalSearchCache;
 use App\Traits\HasDatabaseHealthCheck;
+use App\Traits\HasDatabaseProxyDomain;
 use App\Traits\HasLogRedactionSetting;
 use App\Traits\HasMetrics;
 use App\Traits\HasSafeStringAttribute;
@@ -15,7 +16,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class StandaloneMongodb extends BaseModel
 {
-    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
+    use Auditable, ClearsGlobalSearchCache, HasDatabaseHealthCheck, HasDatabaseProxyDomain, HasFactory, HasLogRedactionSetting, HasMetrics, HasSafeStringAttribute, HasSecretManager, SoftDeletes;
 
     protected $fillable = [
         'uuid',
@@ -29,6 +30,7 @@ class StandaloneMongodb extends BaseModel
         'image',
         'is_public',
         'public_port',
+        'domain',
         'ports_mappings',
         'limits_memory',
         'limits_memory_swap',
@@ -336,16 +338,19 @@ class StandaloneMongodb extends BaseModel
     {
         return new Attribute(
             get: function () {
-                if ($this->is_public && $this->public_port) {
-                    $serverIp = $this->destination->server->getIp;
-                    if (empty($serverIp)) {
+                if ($this->isPubliclyAccessible()) {
+                    $serverHost = $this->publicEndpointHost();
+                    $port = $this->publicEndpointPort();
+                    if ($serverHost === null || $port === null) {
                         return null;
                     }
-                    $serverHost = formatHostForUrl($serverIp);
                     $encodedUser = rawurlencode($this->mongo_initdb_root_username);
                     $encodedPass = rawurlencode($this->mongo_initdb_root_password);
-                    $url = "mongodb://{$encodedUser}:{$encodedPass}@{$serverHost}:{$this->public_port}/?directConnection=true";
-                    if ($this->enable_ssl) {
+                    $url = "mongodb://{$encodedUser}:{$encodedPass}@{$serverHost}:{$port}/?directConnection=true";
+                    if ($this->hasProxyDomain()) {
+                        // The proxy terminates TLS, so the client always uses it.
+                        $url .= '&tls=true';
+                    } elseif ($this->enable_ssl) {
                         $url .= '&tls=true&tlsCAFile=/etc/mongo/certs/ca.pem';
                         if (in_array($this->ssl_mode, ['verify-full'])) {
                             $url .= '&tlsCertificateKeyFile=/etc/mongo/certs/server.pem';

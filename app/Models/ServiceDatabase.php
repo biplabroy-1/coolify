@@ -2,12 +2,13 @@
 
 namespace App\Models;
 
+use App\Traits\HasDatabaseProxyDomain;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class ServiceDatabase extends BaseModel
 {
-    use HasFactory, SoftDeletes;
+    use HasDatabaseProxyDomain, HasFactory, SoftDeletes;
 
     protected $fillable = [
         'service_id',
@@ -21,6 +22,7 @@ class ServiceDatabase extends BaseModel
         'exclude_from_status',
         'image',
         'public_port',
+        'domain',
         'is_public',
         'is_log_drain_enabled',
         'is_include_timestamps',

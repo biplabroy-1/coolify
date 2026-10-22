@@ -82,11 +82,14 @@
                     <x-forms.listbox id="isPublic" label="Access" live onChange="instantSave"
                         :disabled="! auth()->user()->can('update', $database)" canGate="update" :canResource="$database" :options="[
                             ['value' => false, 'label' => 'Private'],
-                            ['value' => true, 'label' => blank($publicPort) ? 'Public through TCP proxy (set public port first)' : 'Public through TCP proxy', 'disabled' => blank($publicPort)],
+                            ['value' => true, 'label' => filled($domain) ? 'Public through the proxy domain' : (blank($publicPort) ? 'Public (set a public port or a domain first)' : 'Public through TCP proxy'), 'disabled' => blank($publicPort) && blank($domain)],
                         ]" />
                 </div>
                 <x-forms.input type="number" placeholder="6379" disabled="{{ $isPublic }}" id="publicPort"
                     label="Public port" canGate="update" :canResource="$database" />
+                <x-forms.input placeholder="db.example.com" id="domain" label="Domain"
+                    helper="Expose this database through the database proxy of the server. The proxy picks the database by this hostname, so point the domain at {{ $server?->getIp }}. Coolify creates the record when Cloudflare manages the zone, otherwise the database needs its own certificate (enable SSL on the database)."
+                    canGate="update" :canResource="$database" />
                 <x-forms.input type="number" placeholder="3600" disabled="{{ $isPublic }}" id="publicPortTimeout"
                     label="Proxy timeout" helper="Timeout in seconds. The default is 3600."
                     canGate="update" :canResource="$database" />

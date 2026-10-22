@@ -117,7 +117,7 @@ When you add a model or a setting to the transfer, add it to this file too.
 | ➕ | KeyDB, Dragonfly, ClickHouse | defaults are enough, plus the common settings below |
 | ➕ | SQLite | database files list, volume link |
 
-Common settings on at least one database: custom image, public port + public on + public port timeout, limits, custom docker run options, health check values, log drain, include timestamps, redact env values, Coolify default variables off, environment variables, persistent volume + volume backup, tags, secret manager link (if the type supports it).
+Common settings on at least one database: custom image, public port + public on + public port timeout, limits, custom docker run options, health check values, log drain, include timestamps, redact env values, Coolify default variables off, environment variables, persistent volume + volume backup, tags, secret manager link (if the type supports it). Also set a domain on one database with public on (needs the Traefik proxy); expected on the target: the domain is kept and the domain still resolves to the target server.
 
 Database backups (✅ one exists): add S3 on, dump all, databases list, local and S3 retention (amount, days, max storage), timeout, disable local backup, missing-backup days.
 

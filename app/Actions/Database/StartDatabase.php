@@ -99,7 +99,7 @@ class StartDatabase
             throw $e;
         }
 
-        if ($database->is_public && $database->public_port) {
+        if ($database->is_public && $database->public_port && ! $database->hasProxyDomain()) {
             StartDatabaseProxy::dispatch($database);
         }
 
