@@ -87,7 +87,7 @@
             <div class="relative w-full sm:w-64">
                 <x-reicon name="search"
                     class="pointer-events-none absolute top-1/2 left-2.5 z-10 size-3.5 -translate-y-1/2 text-neutral-400 dark:text-fg-faint" />
-                <input type="search" x-model="domainSearch" aria-label="Search services or domains"
+                <input type="search" x-model="domainSearch" aria-label="Search services or domains" @submit.prevent
                     class="input h-8! w-full pl-8! text-[13px]!" placeholder="Search services or domains" />
             </div>
         @endif

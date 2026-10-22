@@ -94,6 +94,8 @@
             </div>
         </x-application.settings-section>
 
+        <livewire:project.database.database-domains :database="$database" />
+
         <x-application.settings-section title="Configuration"
             description="Override only the KeyDB directives you need. All other defaults remain active.">
             <x-forms.textarea

@@ -99,6 +99,8 @@
             </div>
         </x-application.settings-section>
 
+        <livewire:project.database.database-domains :database="$database" />
+
         <x-application.settings-section title="Configuration"
             description="Override the MariaDB configuration used by this container.">
             <x-forms.textarea label="Custom MariaDB configuration" rows="10" id="mariadbConf"

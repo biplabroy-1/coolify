@@ -103,6 +103,8 @@
             </div>
         </x-application.settings-section>
 
+        <livewire:project.database.database-domains :database="$database" />
+
         <x-application.settings-section id="configuration-section" title="Configuration"
             description="Override the PostgreSQL configuration used by this container.">
             <x-forms.textarea label="Custom PostgreSQL configuration" rows="10" id="postgresConf"

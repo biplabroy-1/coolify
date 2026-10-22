@@ -115,6 +115,8 @@
             </div>
         </x-application.settings-section>
 
+        <livewire:project.database.database-domains :database="$database" />
+
         <x-application.settings-section title="Log delivery"
             description="Forward container logs to the drain configured on the server.">
             <x-forms.listbox canGate="update" :canResource="$database" id="isLogDrainEnabled" label="Log drain" live onChange="instantSaveAdvanced"
