@@ -4,16 +4,12 @@ namespace App\Livewire\Concerns;
 
 use App\Actions\Shared\CheckDomainDns;
 use App\Jobs\CheckDomainDnsJob;
-use App\Livewire\Project\Shared\ConfigurationChecker;
 use App\Models\Application;
 use App\Models\Server;
 use App\Support\DomainPortOverrides;
 use App\Support\DomainUrlParts;
 use App\Support\ValidationPatterns;
-use App\Traits\AuditsApplicationSettings;
-use App\Traits\ListensToTeamChannel;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Locked;
@@ -67,7 +63,6 @@ trait ManagesResourceDomains
 
     protected bool $notifyRedirectUpdate = true;
 
-
     protected function rules(): array
     {
         return [
@@ -83,7 +78,6 @@ trait ManagesResourceDomains
         ];
     }
 
-
     protected function messages(): array
     {
         return array_merge(
@@ -96,7 +90,6 @@ trait ManagesResourceDomains
             ]
         );
     }
-
 
     /**
      * @return array{internal_port: ?int, has_port_override: bool}
@@ -123,7 +116,14 @@ trait ManagesResourceDomains
             ];
         }
 
-        $composePort = dockerComposeServicePort($this->application->docker_compose_raw, $service);
+        if (! $this->isApplication()) {
+            // A database is reached on the port the database proxy publishes for it.
+            return method_exists($this->resource(), 'publicEndpointPort')
+                ? ['internal_port' => $this->resource()->publicEndpointPort(), 'has_port_override' => false]
+                : ['internal_port' => null, 'has_port_override' => false];
+        }
+
+        $composePort = dockerComposeServicePort($this->resource()->docker_compose_raw, $service);
         if ($composePort !== null) {
             return [
                 'internal_port' => $composePort,
@@ -155,7 +155,6 @@ trait ManagesResourceDomains
             'has_port_override' => false,
         ];
     }
-
 
     /**
      * The resource whose domains this component manages: an application or a database.
@@ -224,7 +223,6 @@ trait ManagesResourceDomains
         return $this->isApplication() && $this->resource()->additional_servers->count() > 0;
     }
 
-
     public string $newDomain = '';
 
     public array $newDomainParts = ['scheme' => 'https', 'host' => '', 'port' => '', 'path' => ''];
@@ -289,7 +287,6 @@ trait ManagesResourceDomains
     #[Locked]
     public ?string $serverIpConfigured = null;
 
-
     public function getListeners(): array
     {
         return array_merge(
@@ -298,8 +295,18 @@ trait ManagesResourceDomains
         );
     }
 
-    public function mount(): void
+    /**
+     * The resource is passed as a component parameter, so it is bound on every request.
+     */
+    public function mount(?Application $application = null, $database = null): void
     {
+        if ($application !== null) {
+            $this->application = $application;
+        }
+        if ($database !== null) {
+            $this->database = $database;
+        }
+
         $this->authorize('view', $this->resource());
         $this->loadDomainState();
     }
@@ -1524,5 +1531,4 @@ trait ManagesResourceDomains
     {
         return $this->resource()->destination?->server?->id === 0;
     }
-
 }
