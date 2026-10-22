@@ -61,6 +61,9 @@ class StartMysql
         } else {
             $this->commands[] = "echo 'Setting up SSL for this database.'";
             $this->commands[] = "mkdir -p $this->configuration_dir/ssl";
+            // Docker creates a missing bind source as an empty directory, which would otherwise
+            // block the certificate files from being written; remove them before the state check.
+            instant_remote_process(["rm -rf {$this->configuration_dir}/ssl/server.crt {$this->configuration_dir}/ssl/server.key {$this->configuration_dir}/ssl/server.pem"], $this->database->destination->server);
 
             $server = $this->database->destination->server;
             $caCert = $server->ensureCaCertificate() ?? throw DatabaseStartException::missingCaCertificate();
@@ -73,7 +76,6 @@ class StartMysql
                 // The certificate files are only written when they are missing on the server, so
                 // the old ones have to go or the database keeps a key that does not match the
                 // new certificate.
-                instant_remote_process(["rm -rf {$this->configuration_dir}/ssl/server.crt {$this->configuration_dir}/ssl/server.key"], $this->database->destination->server);
                 $this->commands[] = "echo 'No SSL certificate found, generating new SSL certificate for this database.'";
                 $this->ssl_certificate = SslHelper::generateSslCertificate(
                     commonName: $this->database->uuid,
