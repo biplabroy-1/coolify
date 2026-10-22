@@ -80,6 +80,7 @@
             <div class="grid gap-4 lg:grid-cols-2">
                 <div wire:key="public-access-{{ $publicPort ?: 'unset' }}">
                     <x-forms.listbox id="isPublic" label="Access" live onChange="instantSave"
+                        :helper="filled($database->domain) ? 'Exposed through the database proxy on the shared port. Remove the domain to use a raw TCP port instead.' : 'Exposed on a host port through the TCP proxy.'"
                         :disabled="! auth()->user()->can('update', $database)" canGate="update" :canResource="$database" :options="[
                             ['value' => false, 'label' => 'Private'],
                             ['value' => true, 'label' => filled($database->domain) ? 'Public through the proxy domain' : (blank($publicPort) ? 'Public (set a public port or a domain first)' : 'Public through TCP proxy'), 'disabled' => blank($publicPort) && blank($database->domain)],
