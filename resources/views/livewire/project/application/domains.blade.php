@@ -7,6 +7,9 @@
     $hasHttpsDomains = collect($domainRows)->contains(
         fn ($row) => ! ($row['is_suggested'] ?? false) && str_starts_with(strtolower($row['url']), 'https://')
     );
+    // A database is reached through the database proxy, it has no redirects and no indexing rules.
+    $isApplication = $this->isApplication();
+    $gridClass = 'service-domains-overview-grid'.($isApplication ? '' : ' service-domains-overview-grid--plain');
 @endphp
 
 <div id="application-domains-section" class="domains-overview-container flex flex-col gap-4"
@@ -118,7 +121,7 @@
                                         :disabled="! auth()->user()->can('update', $this->resource())" />
                                 @endif
 
-                                <x-forms.domain-input id="newDomainParts" errorId="newDomain" />
+                                <x-forms.domain-input id="newDomainParts" errorId="newDomain" :hostOnly="! $isApplication" />
 
                                 @if ($addDomainDnsFailed)
                                     <x-callout type="danger" title="DNS is not pointing to the right IP">
@@ -155,7 +158,7 @@
         </div>
     </div>
 
-    @if ($hasRows && ! $labelsAreWritable)
+    @if ($isApplication && $hasRows && ! $labelsAreWritable)
         <div class="flex flex-wrap items-center justify-end gap-2 service-domains-https">
             @if ($hasHttpsDomains)
                 <label for="isForceHttpsEnabled-trigger" class="mb-0! text-[12px]!">Redirect HTTP to HTTPS</label>
@@ -186,12 +189,16 @@
     <div id="domains-table-section"
         class="application-settings-section-body mt-1 scroll-mt-28 {{ $hasRows ? 'is-flush' : '' }} w-full">
         @if ($hasRows)
-            <div class="data-table-header service-domains-overview-grid">
+            <div class="data-table-header {{ $gridClass }}">
                 <span>Domain</span>
-                <span>Protocol redirect</span>
-                <span>Domain redirect</span>
+                @if ($isApplication)
+                    <span>Protocol redirect</span>
+                    <span>Domain redirect</span>
+                @endif
                 <span>Internal port</span>
-                <span>Search indexing</span>
+                @if ($isApplication)
+                    <span>Search indexing</span>
+                @endif
                 <span>DNS status</span>
                 <span class="text-right">Actions</span>
             </div>
@@ -256,6 +263,7 @@
                                     'application' => $this->resource(),
                                     'labelsAreWritable' => $labelsAreWritable,
                                     'isCompose' => true,
+                                    'isApplication' => $isApplication,
                                 ])
                             @endforeach
                         </div>
@@ -277,6 +285,7 @@
                         'application' => $this->resource(),
                         'labelsAreWritable' => $labelsAreWritable,
                         'isCompose' => false,
+                        'isApplication' => $isApplication,
                     ])
                 @endforeach
             </div>
@@ -328,7 +337,7 @@
                                     <input type="text" class="input" readonly x-bind:value="editingServiceLabel" />
                                 </div>
 
-                                <x-forms.domain-input id="editingDomainParts" errorId="editingDomain" />
+                                <x-forms.domain-input id="editingDomainParts" errorId="editingDomain" :hostOnly="! $isApplication" />
 
                                 @if ($editDomainDnsFailed)
                                     <x-callout type="danger" title="DNS is not pointing to the right IP">
@@ -343,24 +352,26 @@
 
                                 @unless ($labelsAreWritable)
                                     @can('update', $this->resource())
-                                        <div
-                                            class="grid grid-cols-1 gap-4 border-t border-neutral-200 pt-4 sm:grid-cols-2 dark:border-white/10">
-                                        <x-forms.listbox id="editingIndexing"
-                                            htmlId="application-domain-indexing" label="Search engine indexing" portal
-                                            :options="[
-                                                ['value' => 'index', 'label' => 'Indexable'],
-                                                ['value' => 'noindex', 'label' => 'Noindex'],
-                                            ]" />
-                                        <x-forms.listbox id="editingRedirect"
-                                            htmlId="application-domain-direction" label="www redirect"
-                                            :helper="$isCompose ? 'Applies to all domains for this Compose service.' : 'Applies to all domains for this application.'"
-                                            portal
-                                            :options="[
-                                                ['value' => 'both', 'label' => 'No redirect'],
-                                                ['value' => 'www', 'label' => 'Redirect to www'],
-                                                ['value' => 'non-www', 'label' => 'Redirect to non-www'],
-                                            ]" />
-                                        </div>
+                                        @if ($isApplication)
+                                            <div
+                                                class="grid grid-cols-1 gap-4 border-t border-neutral-200 pt-4 sm:grid-cols-2 dark:border-white/10">
+                                                <x-forms.listbox id="editingIndexing"
+                                                    htmlId="application-domain-indexing" label="Search engine indexing" portal
+                                                    :options="[
+                                                        ['value' => 'index', 'label' => 'Indexable'],
+                                                        ['value' => 'noindex', 'label' => 'Noindex'],
+                                                    ]" />
+                                                <x-forms.listbox id="editingRedirect"
+                                                    htmlId="application-domain-direction" label="www redirect"
+                                                    :helper="$isCompose ? 'Applies to all domains for this Compose service.' : 'Applies to all domains for this application.'"
+                                                    portal
+                                                    :options="[
+                                                        ['value' => 'both', 'label' => 'No redirect'],
+                                                        ['value' => 'www', 'label' => 'Redirect to www'],
+                                                        ['value' => 'non-www', 'label' => 'Redirect to non-www'],
+                                                    ]" />
+                                            </div>
+                                        @endif
                                     @endcan
                                 @endunless
                                 </div>

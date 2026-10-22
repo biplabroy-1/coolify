@@ -14,7 +14,7 @@
         'pending' => 'Not checked',
         default => 'DNS unknown',
     };
-    $gridClass = 'service-domains-overview-grid';
+    $gridClass = 'service-domains-overview-grid'.($isApplication ? '' : ' service-domains-overview-grid--plain');
     $publicUrl = getFqdnWithoutPort($row['url']);
     $faviconUrl = $isSuggested ? null : \App\Support\DomainFavicon::url($publicUrl, $row['dns_status'] ?? null, $row['expected_ip'] ?? null);
     $rowDirection = $isCompose
@@ -74,14 +74,16 @@
             @endif
         </div>
 
-        <div class="service-domain-detail" title="Protocol redirect">
-            <span class="service-domain-detail-label">Protocol redirect</span>
-            <span>{{ str_starts_with($row['url'], 'https://') && $isForceHttpsEnabled ? 'HTTP → HTTPS' : 'Disabled' }}</span>
-        </div>
-        <div class="service-domain-detail" title="Domain redirect">
-            <span class="service-domain-detail-label">Domain redirect</span>
-            <span>{{ match ($rowDirection) { 'www' => 'non-www → www', 'non-www' => 'www → non-www', default => 'Disabled' } }}</span>
-        </div>
+        @if ($isApplication)
+            <div class="service-domain-detail" title="Protocol redirect">
+                <span class="service-domain-detail-label">Protocol redirect</span>
+                <span>{{ str_starts_with($row['url'], 'https://') && $isForceHttpsEnabled ? 'HTTP → HTTPS' : 'Disabled' }}</span>
+            </div>
+            <div class="service-domain-detail" title="Domain redirect">
+                <span class="service-domain-detail-label">Domain redirect</span>
+                <span>{{ match ($rowDirection) { 'www' => 'non-www → www', 'non-www' => 'www → non-www', default => 'Disabled' } }}</span>
+            </div>
+        @endif
         <div class="service-domain-detail"
             title="{{ ($row['has_port_override'] ?? false) ? 'Custom internal port for this domain' : 'Inherited from the application or Compose service port' }}">
             <span class="service-domain-detail-label">Internal port</span>
@@ -93,25 +95,31 @@
                 </span>
             @endif
         </div>
-        <div class="service-domain-detail">
-            <span class="service-domain-detail-label">Search indexing</span>
-            <span role="img" aria-label="{{ $isNoindexed ? 'Search indexing blocked' : 'Search indexing allowed' }}"
-                title="{{ $isNoindexed ? 'Search indexing blocked' : 'Search indexing allowed' }}">
-                <x-reicon :name="$isNoindexed ? 'x' : 'check'" class="size-4" />
-            </span>
-        </div>
+        @if ($isApplication)
+            <div class="service-domain-detail">
+                <span class="service-domain-detail-label">Search indexing</span>
+                <span role="img" aria-label="{{ $isNoindexed ? 'Search indexing blocked' : 'Search indexing allowed' }}"
+                    title="{{ $isNoindexed ? 'Search indexing blocked' : 'Search indexing allowed' }}">
+                    <x-reicon :name="$isNoindexed ? 'x' : 'check'" class="size-4" />
+                </span>
+            </div>
+        @endif
 
         <div class="service-domain-mobile-summary" aria-label="Domain routing summary">
-            @if (str_starts_with($row['url'], 'https://') && $isForceHttpsEnabled)
-                <span>HTTP → HTTPS</span>
-            @endif
-            @if (in_array($rowDirection, ['www', 'non-www'], true))
-                <span>{{ $rowDirection === 'www' ? 'non-www → www' : 'www → non-www' }}</span>
-            @elseif (! str_starts_with($row['url'], 'https://') || ! $isForceHttpsEnabled)
-                <span>No redirects</span>
+            @if ($isApplication)
+                @if (str_starts_with($row['url'], 'https://') && $isForceHttpsEnabled)
+                    <span>HTTP → HTTPS</span>
+                @endif
+                @if (in_array($rowDirection, ['www', 'non-www'], true))
+                    <span>{{ $rowDirection === 'www' ? 'non-www → www' : 'www → non-www' }}</span>
+                @elseif (! str_starts_with($row['url'], 'https://') || ! $isForceHttpsEnabled)
+                    <span>No redirects</span>
+                @endif
             @endif
             <span>Port {{ $row['internal_port'] ?? 'missing' }}</span>
-            <span>{{ $isNoindexed ? 'Noindex' : 'Indexable' }}</span>
+            @if ($isApplication)
+                <span>{{ $isNoindexed ? 'Noindex' : 'Indexable' }}</span>
+            @endif
         </div>
 
         <div class="service-domain-dns flex min-w-0 items-center">
@@ -158,7 +166,7 @@
                         <x-modal-confirmation class="!w-auto shrink-0" title="Remove domain?" buttonTitle="Remove"
                             isErrorButton canGate="update" :canResource="$this->resource()"
                             submitAction="removeDomainByKey({{ $domainKey }})" :actions="[
-                                'This domain will be removed from the application.',
+                                $isApplication ? 'This domain will be removed from the application.' : 'This domain will be removed from the database.',
                                 'Redeploy or restart may be required for proxy changes.',
                             ]" :checkboxes="[['id' => 'deleteManagedDns', 'label' => 'Also delete the DNS record created by Coolify, if present.']]"
                             :confirmWithPassword="false" :confirmWithText="false" step2ButtonText="Remove domain">
