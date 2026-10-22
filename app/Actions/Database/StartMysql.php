@@ -70,6 +70,10 @@ class StartMysql
 
             if (! $this->ssl_certificate || ($this->database->domain && ! in_array('DNS:'.$this->database->domain, $this->ssl_certificate->subject_alternative_names ?? []))) {
                 $this->database->sslCertificates()->delete();
+                // The certificate files are only written when they are missing on the server, so
+                // the old ones have to go or the database keeps a key that does not match the
+                // new certificate.
+                $this->commands[] = "rm -f {$this->configuration_dir}/ssl/server.crt {$this->configuration_dir}/ssl/server.key";
                 $this->commands[] = "echo 'No SSL certificate found, generating new SSL certificate for this database.'";
                 $this->ssl_certificate = SslHelper::generateSslCertificate(
                     commonName: $this->database->uuid,
