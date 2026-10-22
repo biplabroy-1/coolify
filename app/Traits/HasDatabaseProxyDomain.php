@@ -6,6 +6,7 @@ use App\Actions\Database\ApplyDatabaseDomain;
 use App\Models\Server;
 use App\Models\ServiceDatabase;
 use App\Support\DatabaseProxyProtocol;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 
 trait HasDatabaseProxyDomain
 {
@@ -21,6 +22,47 @@ trait HasDatabaseProxyDomain
                 ApplyDatabaseDomain::dispatch($database);
             }
         });
+    }
+
+    /**
+     * The domains of the database in the format of the fqdn of an application, so the domains
+     * page of an application and the one of a database work the same way.
+     */
+    protected function fqdn(): Attribute
+    {
+        return new Attribute(
+            get: fn () => $this->proxyDomains() === []
+                ? null
+                : collect($this->proxyDomains())->map(fn (string $domain): string => 'https://'.$domain)->implode(','),
+            set: function (?string $value): void {
+                $domains = collect(explode(',', (string) $value))
+                    ->map(fn (string $url): string => trim((string) parse_url(trim($url), PHP_URL_HOST)))
+                    ->filter()
+                    ->unique()
+                    ->values();
+                $this->domain = $domains === [] ? null : $domains->implode(',');
+            },
+        );
+    }
+
+    public function isForceHttpsEnabled(): bool
+    {
+        return true;
+    }
+
+    public function isPermanentRedirectEnabled(): bool
+    {
+        return false;
+    }
+
+    public function isDomainNoindexed(string $url): bool
+    {
+        return false;
+    }
+
+    public function setNoindexDomains(array $domains): void
+    {
+        //
     }
 
     /**
@@ -74,6 +116,11 @@ trait HasDatabaseProxyDomain
     /**
      * The server the database runs on.
      */
+    public function getRedirectAttribute(): string
+    {
+        return 'both';
+    }
+
     public function proxyServer(): ?Server
     {
         if ($this instanceof ServiceDatabase) {
