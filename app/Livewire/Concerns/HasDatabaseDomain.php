@@ -41,6 +41,6 @@ trait HasDatabaseDomain
      */
     public function databaseNeedsPublicPort(): bool
     {
-        return blank($this->domain);
+        return blank($this->database?->domain);
     }
 }

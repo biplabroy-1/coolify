@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Database\ApplyDatabaseDomain;
+use App\Livewire\Project\Database\Domains as DatabaseDomains;
 use App\Livewire\Project\Database\Postgresql\General as PostgresqlGeneral;
 use App\Models\DnsProviderZone;
 use App\Models\Environment;
@@ -23,6 +24,8 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     Queue::fake();
     InstanceSettings::forceCreate(['id' => 0]);
+    // The DNS check of the domains page must not reach the network in the tests.
+    InstanceSettings::find(0)->update(['is_dns_validation_enabled' => false]);
     config(['constants.ssh.mux_enabled' => false]);
 
     $this->team = Team::factory()->create();
@@ -225,6 +228,36 @@ test('a second database of the same type gets the next free port', function () {
         ->and($second->refresh()->proxy_port)->toBe(3307);
 });
 
+test('the domains page adds a domain to the database', function () {
+    $user = User::factory()->create();
+    $this->team->members()->attach($user->id, ['role' => 'owner']);
+    session(['currentTeam' => $this->team]);
+    $this->actingAs($user);
+
+    $database = create_standalone_postgresql($this->environment->id, $this->destination, [
+        'is_public' => true,
+        'enable_ssl' => true,
+        'status' => 'running:healthy',
+        'postgres_user' => 'postgres',
+        'postgres_db' => 'postgres',
+        'is_log_drain_enabled' => false,
+    ]);
+
+    Livewire::test(DatabaseDomains::class, ['database' => $database])
+        ->set('newDomain', 'db.example.com')
+        ->call('addDomain')
+        ->assertHasNoErrors();
+
+    expect($database->refresh()->domain)->toBe('db.example.com')
+        ->and((bool) $database->is_public)->toBeTrue();
+
+    Livewire::test(DatabaseDomains::class, ['database' => $database])
+        ->call('removeDomain')
+        ->assertHasNoErrors();
+
+    expect($database->refresh()->domain)->toBeNull();
+});
+
 test('the general component saves the domain', function () {
     $user = User::factory()->create();
     $this->team->members()->attach($user->id, ['role' => 'owner']);
@@ -240,13 +273,15 @@ test('the general component saves the domain', function () {
         'is_log_drain_enabled' => false,
     ]);
 
+    // The domain lives on the domains page, saving the general settings keeps it.
+    $database->domain = 'db.example.com';
+    $database->saveQuietly();
+
     Livewire::test(PostgresqlGeneral::class, ['database' => $database])
-        ->set('domain', 'DB.Example.com')
         ->call('submit')
         ->assertHasNoErrors();
 
     expect($database->refresh()->domain)->toBe('db.example.com');
-    ApplyDatabaseDomain::assertPushed();
 });
 
 test('the general component refuses a domain without a certificate', function () {

@@ -9,6 +9,7 @@
 
     $configurationItems = collect([
         ['label' => 'General', 'route' => 'project.database.configuration', 'icon' => 'settings'],
+        ['label' => 'Domains', 'route' => 'project.database.domains', 'icon' => 'globe'],
         ['label' => 'Environment Variables', 'route' => 'project.database.environment-variables', 'icon' => 'variables'],
         ['label' => 'Persistent Storage', 'route' => 'project.database.persistent-storage', 'icon' => 'storages'],
         ['label' => 'Backups', 'route' => 'project.database.backup.index', 'icon' => 'database', 'visible' => $database->isBackupSolutionAvailable()],
@@ -33,7 +34,7 @@
         ]);
 
     $menuGroups = [
-        'Settings' => ['General', 'Environment Variables', 'Persistent Storage', 'Healthcheck'],
+        'Settings' => ['General', 'Domains', 'Environment Variables', 'Persistent Storage', 'Healthcheck'],
         'Observe & troubleshoot' => ['Runtime Logs', 'Terminal', 'Files', 'Metrics'],
         'Deploy' => ['Servers'],
         'Automation' => ['Webhooks', 'Backups', 'Import Backup'],
