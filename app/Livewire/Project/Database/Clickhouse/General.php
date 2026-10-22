@@ -64,6 +64,11 @@ class General extends Component
             $this->authorize('view', $this->database);
             $this->syncData();
             $this->server = data_get($this->database, 'destination.server');
+            // A database without a domain is exposed on a host port; default it to the
+            // database's own port so making it public needs no manual entry.
+            if (blank($this->publicPort) && $this->databaseNeedsPublicPort()) {
+                $this->publicPort = $this->database->proxyProtocol()?->port;
+            }
             if (! $this->server) {
                 $this->dispatch('error', 'Database destination server is not configured.');
 
