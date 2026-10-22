@@ -96,13 +96,15 @@ class ApplyDatabaseDomain
 
         try {
             $provider = app(CloudflareDnsProvider::class);
-            $zone = $provider->findZones($teamId, $database->domain)->first();
-            if (! $zone) {
-                return;
+            foreach ($database->proxyDomains() as $domain) {
+                $zone = $provider->findZones($teamId, $domain)->first();
+                if (! $zone) {
+                    continue;
+                }
+                // A database is reached on a port that Cloudflare does not proxy, so the record
+                // stays on the DNS only.
+                $provider->createRecord($zone, $domain, $ip, $database, proxied: false);
             }
-            // A database is reached on a port that Cloudflare does not proxy, so the record stays
-            // on the DNS only.
-            $provider->createRecord($zone, $database->domain, $ip, $database, proxied: false);
         } catch (\Throwable $e) {
             Log::error('Could not create the DNS record of the database domain.', [
                 'database_id' => $database->id,

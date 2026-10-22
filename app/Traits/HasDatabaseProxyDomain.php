@@ -49,7 +49,18 @@ trait HasDatabaseProxyDomain
      */
     public function hasProxyDomain(): bool
     {
-        return (bool) $this->is_public && filled($this->domain) && $this->proxyProtocol() !== null;
+        return (bool) $this->is_public && $this->proxyDomains() !== [] && $this->proxyProtocol() !== null;
+    }
+
+    /**
+     * The domains the database is reached with. The first one is the primary domain.
+     */
+    public function proxyDomains(): array
+    {
+        return array_values(array_filter(array_map(
+            fn (string $domain): string => strtolower(trim($domain)),
+            explode(',', (string) $this->domain)
+        )));
     }
 
     /**
@@ -133,7 +144,7 @@ trait HasDatabaseProxyDomain
     public function publicEndpointHost(): ?string
     {
         if ($this->hasProxyDomain()) {
-            return $this->domain;
+            return $this->proxyDomains()[0] ?? null;
         }
 
         $serverIp = $this->proxyServer()?->getIp;

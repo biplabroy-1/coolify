@@ -157,7 +157,9 @@ class DatabaseProxyConfiguration
             if (! $dedicatedPort) {
                 // The shared port of a protocol picks the database by the hostname of the TLS
                 // handshake. A database with a port of its own is the only database on it.
-                $router['rule'] = "HostSNI(`{$database->domain}`)";
+                $router['rule'] = collect($database->proxyDomains())
+                    ->map(fn (string $domain): string => "HostSNI(`{$domain}`)")
+                    ->implode(' || ');
             }
             if ($passthrough) {
                 $router['tls'] = ['passthrough' => true];
@@ -165,7 +167,9 @@ class DatabaseProxyConfiguration
                 $router['tls'] = ['certResolver' => self::CERTIFICATE_RESOLVER];
                 if ($dedicatedPort) {
                     // Without a rule the proxy does not know the domain of the certificate.
-                    $router['tls']['domains'] = [['main' => $database->domain]];
+                    $router['tls']['domains'] = collect($database->proxyDomains())
+                        ->map(fn (string $domain): array => ['main' => $domain])
+                        ->all();
                 }
             }
             $routers[$name] = $router;

@@ -68,7 +68,7 @@ class StartKeydb
 
             $this->ssl_certificate = $this->database->sslCertificates()->first();
 
-            if (! $this->ssl_certificate || ($this->database->domain && ! in_array('DNS:'.$this->database->domain, $this->ssl_certificate->subject_alternative_names ?? []))) {
+            if (! $this->ssl_certificate || (collect($this->database->proxyDomains())->contains(fn (string $domain): bool => ! in_array('DNS:'.$domain, $this->ssl_certificate->subject_alternative_names ?? [])))) {
                 $this->database->sslCertificates()->delete();
                 // The certificate files are only written when they are missing on the server, so
                 // the old ones have to go or the database keeps a key that does not match the
@@ -77,7 +77,7 @@ class StartKeydb
                 $this->commands[] = "echo 'No SSL certificate found, generating new SSL certificate for this database.'";
                 $this->ssl_certificate = SslHelper::generateSslCertificate(
                     commonName: $this->database->uuid,
-                    subjectAlternativeNames: array_filter([$this->database->domain ? 'DNS:'.$this->database->domain : null]),
+                    subjectAlternativeNames: array_map(fn (string $domain): string => 'DNS:'.$domain, $this->database->proxyDomains()),
                     resourceType: $this->database->getMorphClass(),
                     resourceId: $this->database->id,
                     serverId: $server->id,

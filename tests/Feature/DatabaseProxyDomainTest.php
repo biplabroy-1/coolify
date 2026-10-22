@@ -228,6 +228,20 @@ test('a second database of the same type gets the next free port', function () {
         ->and($second->refresh()->proxy_port)->toBe(3307);
 });
 
+test('a database can have several domains', function () {
+    $database = create_standalone_postgresql($this->environment->id, $this->destination, [
+        'is_public' => true,
+        'domain' => 'db1.example.com,db2.example.com',
+    ]);
+
+    $routing = DatabaseProxyConfiguration::routing($this->server);
+    $router = $routing['tcp']['routers']['db-'.$database->uuid];
+
+    expect($router['rule'])->toBe('HostSNI(`db1.example.com`) || HostSNI(`db2.example.com`)')
+        ->and($database->proxyDomains())->toBe(['db1.example.com', 'db2.example.com'])
+        ->and($database->publicEndpointHost())->toBe('db1.example.com');
+});
+
 test('the domains page adds a domain to the database', function () {
     $user = User::factory()->create();
     $this->team->members()->attach($user->id, ['role' => 'owner']);
@@ -252,7 +266,7 @@ test('the domains page adds a domain to the database', function () {
         ->and((bool) $database->is_public)->toBeTrue();
 
     Livewire::test(DatabaseDomains::class, ['database' => $database])
-        ->call('removeDomain')
+        ->call('removeDomain', 'db.example.com')
         ->assertHasNoErrors();
 
     expect($database->refresh()->domain)->toBeNull();
