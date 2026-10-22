@@ -698,7 +698,7 @@ trait ManagesResourceDomains
             ->unique()
             ->values();
 
-        $resource->domain = $domains === [] ? null : $domains->implode(',');
+        $resource->domain = $domains->isEmpty() ? null : $domains->implode(',');
     }
 
     /**
@@ -784,7 +784,7 @@ trait ManagesResourceDomains
     /**
      * The resource is passed as a component parameter, so it is bound on every request.
      */
-    public function mount(?Application $application = null, $database = null): void
+    public function mount($application = null, $database = null): void
     {
         if ($application !== null) {
             $this->application = $application;

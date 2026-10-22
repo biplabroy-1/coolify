@@ -9,7 +9,7 @@ use App\Traits\ListensToTeamChannel;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Component;
 
-class Domains extends Component
+class DatabaseDomains extends Component
 {
     use AuthorizesRequests;
     use InteractsWithCloudflareDomainConnect;
