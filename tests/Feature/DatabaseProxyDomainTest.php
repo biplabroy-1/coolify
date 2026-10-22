@@ -167,6 +167,41 @@ test('a database that cannot be routed by the hostname gets a port of its own', 
         ->and($routing['tcp']['services']['db-'.$database->uuid]['loadBalancer']['servers'][0]['address'])->toBe($database->uuid.':3306');
 });
 
+test('a clickhouse database shares the port of its type', function () {
+    Process::fake();
+
+    // A ClickHouse database has no certificate of its own, so the proxy terminates the TLS and
+    // needs a public certificate, which the Cloudflare zone provides.
+    $token = IntegrationToken::factory()->create([
+        'team_id' => $this->team->id,
+        'provider' => 'cloudflare',
+        'capabilities' => ['dns'],
+        'token' => 'cf-token',
+    ]);
+    DnsProviderZone::factory()->create([
+        'integration_token_id' => $token->id,
+        'name' => 'example.com',
+        'provider_zone_id' => 'zone-1',
+    ]);
+
+    $database = create_standalone_clickhouse($this->environment->id, $this->destination, [
+        'is_public' => true,
+        'domain' => 'ch.example.com',
+        'status' => 'running:healthy',
+    ]);
+
+    ApplyDatabaseDomain::run($database);
+
+    expect($database->refresh()->proxy_port)->toBeNull();
+
+    $routing = DatabaseProxyConfiguration::routing($this->server);
+    $router = $routing['tcp']['routers']['db-'.$database->uuid];
+
+    expect($router['rule'])->toBe('HostSNI(`ch.example.com`)')
+        ->and($router['entryPoints'])->toBe(['db-clickhouse'])
+        ->and($router['tls'])->toBe(['certResolver' => 'letsencrypt']);
+});
+
 test('a second database of the same type gets the next free port', function () {
     Process::fake();
 
