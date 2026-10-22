@@ -154,7 +154,7 @@ class StartKeydb
             $docker_compose['services'][$container_name]['volumes'] = array_merge(
                 $docker_compose['services'][$container_name]['volumes'] ?? [],
                 $persistent_file_volumes->map(function ($item) {
-                    return "$item->fs_path:$item->mount_path";
+                    return devHostDockerPath($this->database->destination->server, $item->fs_path).":$item->mount_path";
                 })->toArray()
             );
         }
@@ -183,7 +183,7 @@ class StartKeydb
                 [
                     [
                         'type' => 'bind',
-                        'source' => '/data/coolify/ssl/coolify-ca.crt',
+                        'source' => devHostDockerPath($this->database->destination->server, '/data/coolify/ssl/coolify-ca.crt'),
                         'target' => '/etc/keydb/certs/coolify-ca.crt',
                         'read_only' => true,
                     ],
