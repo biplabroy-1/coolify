@@ -238,11 +238,15 @@ class General extends Component
             }
             $this->dispatch('databaseUpdated');
         } catch (\Throwable $e) {
+            $message = $e->getMessage();
+            if (str_contains($message, 'port is already allocated') || str_contains($message, 'port is already in use')) {
+                $message = "Public port {$this->publicPort} is already in use (the database proxy publishes it for a domain-exposed database). Use a different public port, or remove the domain from the other database first.";
+            }
             $this->authorize('update', $this->database);
             $this->isPublic = ! $this->isPublic;
             $this->syncData(true);
 
-            return handleError($e, $this);
+            return handleError(new \RuntimeException($message, 0, $e), $this);
         }
     }
 
